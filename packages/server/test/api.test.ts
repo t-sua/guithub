@@ -1,0 +1,286 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { FastifyInstance } from 'fastify';
+import { buildApp, isCommitish, isTrackPath, sanitiseFilename } from '../src/app.js';
+import { openDatabase, type Db } from '../src/db.js';
+
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures');
+
+let app: FastifyInstance;
+let db: Db;
+let dataDir: string;
+
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), 'guithub-api-'));
+  db = openDatabase(join(dataDir, 'guithub.db'));
+  app = await buildApp({ db, dataDir });
+  await app.ready();
+});
+
+afterEach(async () => {
+  await app.close();
+  db.close();
+  await rm(dataDir, { recursive: true, force: true });
+});
+
+/** Creates the first (admin) account and returns its session cookie. */
+async function signUpFirstUser(): Promise<string> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/users',
+    payload: {
+      username: 'alice',
+      displayName: 'Alice',
+      email: 'alice@band.test',
+      password: 'correct horse battery staple'
+    }
+  });
+  expect(response.statusCode).toBe(201);
+  return response.cookies[0]!.value;
+}
+
+async function addMember(cookie: string, username: string): Promise<string> {
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/users',
+    cookies: { guithub_session: cookie },
+    payload: {
+      username,
+      displayName: username[0]!.toUpperCase() + username.slice(1),
+      email: `${username}@band.test`,
+      password: 'another good passphrase'
+    }
+  });
+  expect(created.statusCode).toBe(201);
+
+  const login = await app.inject({
+    method: 'POST',
+    url: '/api/login',
+    payload: { username, password: 'another good passphrase' }
+  });
+  expect(login.statusCode).toBe(200);
+  return login.cookies[0]!.value;
+}
+
+async function createSong(cookie: string, title: string): Promise<string> {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/songs',
+    cookies: { guithub_session: cookie },
+    payload: { title }
+  });
+  expect(response.statusCode).toBe(201);
+  return response.json().song.slug as string;
+}
+
+async function uploadVersion(
+  cookie: string,
+  slug: string,
+  fixture: string,
+  message: string
+): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  const bytes = await readFile(join(FIXTURES, fixture));
+  const boundary = '----guithubtest';
+  const payload = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="message"\r\n\r\n${message}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fixture}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`
+    ),
+    bytes,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/songs/${slug}/versions`,
+    cookies: { guithub_session: cookie },
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload
+  });
+  return { statusCode: response.statusCode, body: response.json() };
+}
+
+describe('setup and authentication', () => {
+  it('reports that a fresh instance needs its first account', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/setup' });
+    expect(response.json()).toEqual({ needsFirstUser: true });
+  });
+
+  it('makes the first account an admin and signs it in', async () => {
+    const cookie = await signUpFirstUser();
+    const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: cookie } });
+    expect(me.json().user).toMatchObject({ username: 'alice', isAdmin: true });
+
+    const setup = await app.inject({ method: 'GET', url: '/api/setup' });
+    expect(setup.json()).toEqual({ needsFirstUser: false });
+  });
+
+  it('refuses a second account created by a stranger', async () => {
+    await signUpFirstUser();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      payload: {
+        username: 'mallory',
+        displayName: 'Mallory',
+        email: 'm@example.test',
+        password: 'let me in please'
+      }
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('rejects a wrong password and a wrong username alike', async () => {
+    await signUpFirstUser();
+    const wrongPassword = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'alice', password: 'nope' }
+    });
+    const noSuchUser = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'nobody', password: 'nope' }
+    });
+    expect(wrongPassword.statusCode).toBe(401);
+    expect(noSuchUser.statusCode).toBe(401);
+    expect(noSuchUser.json().error).toBe(wrongPassword.json().error);
+  });
+
+  it('locks every song endpoint behind a session', async () => {
+    await signUpFirstUser();
+    for (const url of ['/api/songs', '/api/songs/anything', '/api/users']) {
+      const response = await app.inject({ method: 'GET', url });
+      expect(response.statusCode, url).toBe(401);
+    }
+  });
+
+  it('ends the session on logout', async () => {
+    const cookie = await signUpFirstUser();
+    await app.inject({ method: 'POST', url: '/api/logout', cookies: { guithub_session: cookie } });
+    const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: cookie } });
+    expect(me.json().user).toBeNull();
+  });
+});
+
+describe('song lifecycle over HTTP', () => {
+  it('carries a song from upload through diff, blame and download', async () => {
+    const alice = await signUpFirstUser();
+    const bob = await addMember(alice, 'bob');
+    const slug = await createSong(alice, 'Peppy Crane');
+
+    const v1 = await uploadVersion(alice, slug, 'song-a.gp', 'First pass at the riff');
+    expect(v1.statusCode).toBe(201);
+    const v2 = await uploadVersion(bob, slug, 'song-a-note-changed.gp', 'Moved the 7 to a 9');
+    expect(v2.statusCode).toBe(201);
+
+    // History, newest first, with the right names on it.
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}`,
+      cookies: { guithub_session: alice }
+    });
+    const versions = detail.json().versions as Array<Record<string, string>>;
+    expect(versions).toHaveLength(2);
+    expect(versions[0]).toMatchObject({ authorName: 'Bob', message: 'Moved the 7 to a 9' });
+    expect(detail.json().song).toMatchObject({ title: 'Peppy Crane', versionCount: 2, trackCount: 2 });
+
+    // The diff describes exactly one note.
+    const diff = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}/diff?from=${v1.body.commit as string}&to=${v2.body.commit as string}`,
+      cookies: { guithub_session: alice }
+    });
+    const tracks = diff.json().diff.tracks as Array<Record<string, unknown>>;
+    const guitar = tracks.find(track => track.name === 'Guitar 1')!;
+    expect(guitar).toMatchObject({ barsModified: 1, barsAdded: 0, barsRemoved: 0 });
+
+    // Blame credits Bob for the bar he changed and Alice for the rest.
+    const blame = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}/blame/${v2.body.commit as string}?path=tracks/01-guitar-1.tab`,
+      cookies: { guithub_session: alice }
+    });
+    const lines = blame.json().blame as Array<Record<string, unknown>>;
+    expect(lines.map(line => line.authorName)).toEqual(['Alice', 'Bob', 'Alice', 'Alice']);
+
+    // The download is byte-identical to what was uploaded.
+    const download = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}/versions/${v1.body.commit as string}/file`,
+      cookies: { guithub_session: alice }
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers['content-disposition']).toContain('song-a.gp');
+    expect(Buffer.from(download.rawPayload).equals(await readFile(join(FIXTURES, 'song-a.gp')))).toBe(true);
+  });
+
+  it('explains why a bad file was rejected and stores nothing', async () => {
+    const cookie = await signUpFirstUser();
+    const slug = await createSong(cookie, 'Broken');
+    const boundary = '----guithubtest';
+    const payload = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="notes.txt"\r\n\r\n` +
+        `just some notes\r\n--${boundary}--\r\n`
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/songs/${slug}/versions`,
+      cookies: { guithub_session: cookie },
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/Unsupported file type/);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}`,
+      cookies: { guithub_session: cookie }
+    });
+    expect(detail.json().versions).toEqual([]);
+  });
+
+  it('gives songs with the same title distinct addresses', async () => {
+    const cookie = await signUpFirstUser();
+    expect(await createSong(cookie, 'Untitled')).toBe('untitled');
+    expect(await createSong(cookie, 'Untitled')).toBe('untitled-2');
+  });
+});
+
+describe('input validation', () => {
+  it('only accepts commit-shaped version ids', () => {
+    expect(isCommitish('a'.repeat(40))).toBe(true);
+    expect(isCommitish('abc1234')).toBe(true);
+    expect(isCommitish('--upload-pack=evil')).toBe(false);
+    expect(isCommitish('HEAD')).toBe(false);
+    expect(isCommitish('../../etc/passwd')).toBe(false);
+  });
+
+  it('only accepts generated track paths', () => {
+    expect(isTrackPath('tracks/01-guitar-1.tab')).toBe(true);
+    expect(isTrackPath('structure.tab')).toBe(true);
+    expect(isTrackPath('tracks/../../../etc/passwd')).toBe(false);
+    expect(isTrackPath('original.gp')).toBe(false);
+  });
+
+  it('strips path separators out of download filenames', () => {
+    expect(sanitiseFilename('../../etc/passwd')).toBe('.._.._etc_passwd');
+    expect(sanitiseFilename('')).toBe('tab.gp');
+  });
+
+  it('rejects a version id that is not a commit', async () => {
+    const cookie = await signUpFirstUser();
+    const slug = await createSong(cookie, 'Guard');
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/songs/${slug}/versions/HEAD`,
+      cookies: { guithub_session: cookie }
+    });
+    expect(response.statusCode).toBe(400);
+  });
+});

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+data/
+*.tsbuildinfo
+
+# Copied out of the alphaTab package by its Vite plugin on each build.
+packages/web/public/font/
+packages/web/public/soundfont/

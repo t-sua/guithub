@@ -1,0 +1,19 @@
+\title "Complex Features"
+\artist "Test"
+\tempo 90
+.
+\track "Rhythm"
+\tuning d5 a4 f4 c4 g3 d3
+\instrument 29
+\ts 6 8
+\ro :8 3.6{pm} 3.6{pm} 5.6 | \rc 2 :8 (3.6 3.5){v} 5.5{lr} 3.4{st} 5.4 6.4 7.4 |
+\ts 4 4 :4 5.5{b(0 4 0)} :8 7.5{sl} 9.5 :4 r r |
+\tempo 140 :16 3.6 3.6 3.6 3.6 :8 5.6{h} 7.6 :4 12.5{nh} 3.6{ah} |
+:4{tu 3} 3.6 5.6 7.6 :4 r |
+\track "Drums"
+\instrument percussion
+:8 35 42 38 42 35 42 38 42 |
+:8 35 42 38 42 35 42 38 42 |
+:4 35 38 35 38 |
+:8 35 35 38 42 35 35 38 42 |
+:1 49 |

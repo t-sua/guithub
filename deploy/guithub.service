@@ -1,0 +1,40 @@
+[Unit]
+Description=GuitHub — version control for guitar tablature
+After=network.target
+
+[Service]
+Type=simple
+User=guithub
+Group=guithub
+WorkingDirectory=/opt/guithub
+
+# Must be Node 20 or newer. systemd does not read shell profiles, so a version
+# manager like nvm is invisible here — point this at a real interpreter path.
+# With nvm, use the absolute path, e.g.:
+#   ExecStart=/home/tsua/.nvm/versions/node/v22.23.2/bin/node packages/server/dist/main.js
+# That path changes on every Node upgrade, so a system-wide install is steadier:
+#   sudo apt install nodejs   (from nodesource, for Node 22)
+ExecStart=/usr/bin/node packages/server/dist/main.js
+Restart=on-failure
+RestartSec=5
+
+Environment=NODE_ENV=production
+Environment=GUITHUB_DATA_DIR=/var/lib/guithub
+Environment=GUITHUB_HOST=127.0.0.1
+Environment=GUITHUB_PORT=8080
+# Caddy terminates TLS, so cookies are only ever sent over HTTPS.
+Environment=GUITHUB_SECURE_COOKIES=true
+
+# The service needs nothing outside its own data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/guithub
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

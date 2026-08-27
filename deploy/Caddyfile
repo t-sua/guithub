@@ -1,0 +1,28 @@
+# Caddy obtains and renews a TLS certificate automatically.
+# Replace the hostname with your own.
+
+tabs.example.com {
+	encode gzip
+
+	# Uploads are capped server-side too; this keeps oversized bodies from ever
+	# reaching Node.
+	request_body {
+		max_size 25MB
+	}
+
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+	}
+}
+
+# For a LAN-only instance with no public domain, use this instead and set
+# GUITHUB_SECURE_COOKIES=false:
+#
+# :80 {
+# 	reverse_proxy 127.0.0.1:8080
+# }
