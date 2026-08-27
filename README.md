@@ -72,7 +72,7 @@ exactly as they were saved.
 
 ## Requirements
 
-- Node.js 22 LTS or newer
+- Node.js 20 or newer (22 LTS recommended)
 - git (used as the storage engine)
 - A C toolchain, for `better-sqlite3` (`build-essential` on Debian/Ubuntu)
 
@@ -81,21 +81,38 @@ exactly as they were saved.
 ```bash
 npm install
 npm run build
-npm test
-
-GUITHUB_DATA_DIR=./data node packages/server/dist/main.js
+GUITHUB_DATA_DIR=./data npm start
 ```
 
 Then open <http://127.0.0.1:8080>. The first account you create becomes the admin and
 can add the rest of the band from the **Members** page. There is no public signup.
 
+If `node --version` reports something older than 20, the server says so and stops
+rather than failing further in. Note that a version manager like nvm only applies to
+shells that read your profile, so `/usr/bin/node` and systemd may still see an older
+one.
+
+### Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run build` | Builds core, then server, then the web UI, in that order |
+| `npm test` | Runs every test. Needs no build — see below |
+| `npm run typecheck` | Typechecks all three packages without emitting |
+| `npm start` | Runs the built server |
+| `npm run clean` | Removes all build output |
+
 ### Development
 
 ```bash
-npm run build -w @guithub/core      # the web and server both depend on this
-node packages/server/dist/main.js  # API on :8080
-npm run dev -w @guithub/web         # UI on :5173, proxying /api to :8080
+npm run build -w @guithub/core     # the running server and the UI build need this
+npm start                          # API on :8080
+npm run dev -w @guithub/web        # UI on :5173, proxying /api to :8080
 ```
+
+The test suite resolves `@guithub/core` to its TypeScript source rather than its
+build output, so `npm test` works on a fresh clone with nothing built and never runs
+against a stale `dist`. The published entry point is covered by `npm run build`.
 
 ### Configuration
 
