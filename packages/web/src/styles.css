@@ -9,10 +9,10 @@
   --text-faint: #6b7188;
   --accent: #7c9cff;
   --accent-dim: #5c76c4;
-  --added: #4ec9a0;
-  --removed: #ff6b7a;
-  --modified: #ffb454;
-  --moved: #c792ea;
+  --added: #3fb950;
+  --removed: #f85149;
+  --modified: #3fb950;
+  --moved: #a371f7;
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -330,6 +330,85 @@ button, input, select, textarea { font: inherit; }
 }
 .bar-line--before { color: #ffb3ba; }
 .bar-line--after { color: #9ee8cd; }
+
+/* ------------------------------------------------------- unified bar diff */
+
+/* A single bar rendered on its own, tinted the way a diff hunk is. */
+.strip {
+  position: relative;
+  border-radius: 6px;
+  padding: 8px 8px 8px 52px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+}
+.strip--new {
+  background: rgba(63, 185, 80, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(63, 185, 80, 0.35);
+}
+.strip--old {
+  background: rgba(248, 81, 73, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(248, 81, 73, 0.35);
+}
+.strip__tag {
+  position: absolute;
+  left: 10px;
+  top: 14px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.strip--new .strip__tag { color: var(--added); }
+.strip--old .strip__tag { color: var(--removed); }
+.strip__art {
+  background: #fff;
+  border-radius: 4px;
+  display: block;
+  padding: 4px 8px;
+  min-height: 40px;
+  /* alphaTab engraves to the width it is given. Capping it keeps a single bar from
+     sitting alone at the left of a very wide white field. */
+  max-width: 680px;
+}
+.strip__art svg { display: block; }
+.strip__error { color: #b04a44; font-size: 13px; margin: 6px 10px; }
+
+.change__kind--added,
+.change__kind--modified {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--added);
+}
+.change__kind--removed { background: rgba(248, 81, 73, 0.15); color: var(--removed); }
+.change__kind--moved { background: rgba(163, 113, 247, 0.15); color: var(--moved); }
+.change__kind {
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.segmented__option {
+  padding: 7px 14px;
+  border: 0;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.segmented__option:hover { color: var(--text); }
+.segmented__option--active { background: var(--accent-dim); color: #fff; }
+
+.version-pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.version-pickers .field { margin-bottom: 0; }
+@media (max-width: 700px) { .version-pickers { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- blame */
 

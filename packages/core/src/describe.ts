@@ -150,10 +150,42 @@ export function describeBarAttr(attr: string): string {
 
 export function unquote(value: string): string {
   if (!value.startsWith('"') || !value.endsWith('"') || value.length < 2) return value;
-  return value
-    .slice(1, -1)
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
+  const body = value.slice(1, -1);
+
+  // Unescaping must be a single left-to-right pass. Sequential global replaces get
+  // this wrong: the text `\\n` (a backslash followed by the letter n) is written as
+  // `\\\\n`, and a pass for `\\n` would match the second backslash and turn it into a
+  // newline, silently corrupting the text.
+  let out = '';
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (ch !== '\\') {
+      out += ch;
+      continue;
+    }
+    const next = body[i + 1];
+    i++;
+    switch (next) {
+      case 'n':
+        out += '\n';
+        break;
+      case 't':
+        out += '\t';
+        break;
+      case '"':
+        out += '"';
+        break;
+      case '\\':
+        out += '\\';
+        break;
+      case undefined:
+        // A trailing lone backslash is not a valid escape; keep it as written.
+        out += '\\';
+        break;
+      default:
+        out += next;
+        break;
+    }
+  }
+  return out;
 }

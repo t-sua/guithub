@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { TabViewer, type BarHighlight } from '../components/TabViewer.js';
-import { authorColor, exactTime, relativeTime } from '../format.js';
+import { exactTime, relativeTime } from '../format.js';
+import { useAuthorColor, withAlpha } from '../authors.js';
 import type { BlameLine, CanonicalSong, SongMetadata, Version } from '../types.js';
 
 type Mode = 'author' | 'age';
@@ -24,6 +25,7 @@ export function BlamePage() {
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<Mode>('author');
   const [trackPath, setTrackPath] = useState<string | null>(null);
+  const colorFor = useAuthorColor();
 
   const commit = searchParams.get('v') ?? '';
 
@@ -90,7 +92,11 @@ export function BlamePage() {
     for (const line of blame) {
       const title = `Bar ${line.bar + 1} — ${line.authorName}, ${relativeTime(line.date)}\n${line.summary}`;
       if (mode === 'author') {
-        map.set(line.bar, { color: authorColor(line.authorName, 0.3), title });
+        map.set(line.bar, {
+          color: withAlpha(colorFor(line.authorName), 0.3),
+          edge: withAlpha(colorFor(line.authorName), 0.6),
+          title
+        });
       } else {
         // Newer edits sit darker, so the parts of the song still in flux stand out.
         const age = (new Date(line.date).getTime() - oldest) / span;
@@ -98,7 +104,7 @@ export function BlamePage() {
       }
     }
     return map;
-  }, [blame, mode]);
+  }, [blame, mode, colorFor]);
 
   const trackIndex = useMemo(() => {
     const match = trackPath ? /^tracks\/(\d+)-/.exec(trackPath) : null;
@@ -181,7 +187,7 @@ export function BlamePage() {
                         <span className="author-chip">
                           <span
                             className="author-chip__dot"
-                            style={{ background: authorColor(line.authorName) }}
+                            style={{ background: colorFor(line.authorName) }}
                           />
                           {line.authorName}
                         </span>
@@ -207,7 +213,7 @@ export function BlamePage() {
                 <div key={name} className="version-row">
                   <span
                     className="author-chip__dot"
-                    style={{ background: authorColor(name), width: 14, height: 14 }}
+                    style={{ background: colorFor(name), width: 14, height: 14 }}
                   />
                   <span className="version-row__main">
                     <span className="version-row__message">{name}</span>

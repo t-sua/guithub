@@ -4,6 +4,8 @@ import * as alphaTab from '@coderline/alphatab';
 /** How one bar should be marked up in the rendered score. */
 export interface BarHighlight {
   readonly color: string;
+  /** Outline colour, so a tint stays legible over dense notation. */
+  readonly edge?: string;
   readonly label?: string;
   readonly title?: string;
 }
@@ -53,7 +55,14 @@ export function TabViewer({
     if (!mount) return;
 
     const api = new alphaTab.AlphaTabApi(mount, {
-      core: { engine: 'svg', logLevel: alphaTab.LogLevel.Error },
+      core: {
+        engine: 'svg',
+        logLevel: alphaTab.LogLevel.Error,
+        // alphaTab defaults to a path next to its bundle chunk (/assets/font/), but
+        // the Vite plugin copies the fonts to the site root. Without this the font
+        // 404s and alphaTab refuses to render at all.
+        fontDirectory: `${import.meta.env.BASE_URL}font/`
+      },
       display: {
         layoutMode: alphaTab.LayoutMode.Page,
         staveProfile: showNotation
@@ -158,11 +167,17 @@ export function TabViewer({
                   width: overlay.width,
                   height: overlay.height,
                   background: highlight.color,
+                  boxShadow: highlight.edge ? `inset 0 0 0 1px ${highlight.edge}` : undefined,
                   cursor: onBarClick ? 'pointer' : 'default'
                 }}
               >
                 {highlight.label ? (
-                  <span className="bar-highlight__label">{highlight.label}</span>
+                  <span
+                    className="bar-highlight__label"
+                    style={highlight.edge ? { background: highlight.edge } : undefined}
+                  >
+                    {highlight.label}
+                  </span>
                 ) : null}
               </button>
             );

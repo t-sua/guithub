@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { TabViewer } from '../components/TabViewer.js';
-import { authorColor, exactTime, formatTuning, initials, relativeTime } from '../format.js';
+import { exactTime, formatTuning, initials, relativeTime } from '../format.js';
+import { useAuthorColor } from '../authors.js';
 import type { CanonicalSong, Song, SongMetadata, Version } from '../types.js';
 
 export function SongPage() {
@@ -15,6 +16,7 @@ export function SongPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [trackIndex, setTrackIndex] = useState<number | null>(null);
+  const colorFor = useAuthorColor();
 
   const selected = searchParams.get('v') ?? versions[0]?.commit ?? null;
 
@@ -180,7 +182,7 @@ export function SongPage() {
                 >
                   <span
                     className="avatar"
-                    style={{ background: authorColor(version.authorName) }}
+                    style={{ background: colorFor(version.authorName) }}
                     title={version.authorName}
                   >
                     {initials(version.authorName)}

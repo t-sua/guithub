@@ -1,5 +1,6 @@
 import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth.js';
+import { AuthorColorProvider } from './authors.js';
 import { LoginPage, MembersPage } from './pages/Auth.js';
 import { SongsPage } from './pages/Songs.js';
 import { SongPage } from './pages/Song.js';
@@ -23,6 +24,7 @@ function Shell() {
   if (!user) return <LoginPage />;
 
   return (
+    <AuthorColorProvider>
     <div className="app">
       <nav className="topbar">
         <Link to="/" className="topbar__brand">
@@ -45,5 +47,6 @@ function Shell() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
+    </AuthorColorProvider>
   );
 }

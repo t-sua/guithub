@@ -8,6 +8,7 @@ import {
   splitTopLevel,
   scanFlags,
   durationName,
+  quote,
   unquote
 } from '../src/index.js';
 import { GP_FIXTURES, loadFixture } from './helpers.js';
@@ -132,17 +133,30 @@ describe('helpers', () => {
     expect(durationName(16, 2)).toBe('double-dotted sixteenth');
   });
 
-  it('unquotes what quote produced', () => {
+  it('unquotes exactly what quote produced', () => {
+    // Round-tripping is tested against the real `quote`, not a copy of its rules, so
+    // the two can never drift apart silently.
     fc.assert(
       fc.property(fc.string(), value => {
-        const escaped = value
-          .replace(/\\/g, '\\\\')
-          .replace(/"/g, '\\"')
-          .replace(/\r\n|\r|\n/g, '\\n')
-          .replace(/\t/g, '\\t');
+        // quote normalises every line ending to \n; that is the only lossy step.
         const normalised = value.replace(/\r\n|\r/g, '\n');
-        expect(unquote(`"${escaped}"`)).toBe(normalised);
+        expect(unquote(quote(value))).toBe(normalised);
       })
     );
+  });
+
+  it('does not mistake an escaped backslash for an escape sequence', () => {
+    // Regression: `quote` writes the two characters \ and n as \\n, and an
+    // unescaper doing sequential global replaces matched the second backslash with
+    // the n and produced a newline. Found by the property test above.
+    for (const value of ['\\n', '\\t', '\\"', '\\\\n', 'C:\\new\\tab', 'ends with \\']) {
+      expect(unquote(quote(value)), JSON.stringify(value)).toBe(value);
+    }
+  });
+
+  it('leaves anything that is not a quoted string alone', () => {
+    expect(unquote('plain')).toBe('plain');
+    expect(unquote('"')).toBe('"');
+    expect(unquote('')).toBe('');
   });
 });

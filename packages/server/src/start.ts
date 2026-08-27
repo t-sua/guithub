@@ -27,10 +27,17 @@ export async function start(): Promise<void> {
 
   if (existsSync(webRoot)) {
     await app.register(fastifyStatic, { root: webRoot });
-    // The UI is a single-page app: any non-API path that is not a real file is a
+    // The UI is a single-page app: a non-API path that is not a real file is a
     // client-side route, so hand back index.html and let the browser resolve it.
+    //
+    // A request that looks like a file is deliberately excluded. Answering a missing
+    // font or script with HTML turns a plain 404 into a baffling downstream error —
+    // a missing Bravura font once surfaced as "OTS parsing error: invalid
+    // sfntVersion", which is the parser choking on "<!DOCTYPE".
     app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/api/')) {
+      const path = request.url.split('?')[0] ?? '';
+      const looksLikeAsset = /\.[a-z0-9]{2,5}$/i.test(path);
+      if (request.url.startsWith('/api/') || looksLikeAsset) {
         return reply.code(404).send({ error: 'Not found.' });
       }
       return reply.sendFile('index.html');
