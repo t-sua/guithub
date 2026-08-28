@@ -75,70 +75,6 @@ MusicXML (`.xml`, `.musicxml`, `.mxl`) and Capella (`.cap`, `.capx`).
 Since the original file is stored untouched, downloads always open in Guitar Pro
 exactly as they were saved.
 
-## Requirements
-
-- Node.js 20 or newer (22 LTS recommended)
-- git (used as the storage engine)
-- A C toolchain, for `better-sqlite3` (`build-essential` on Debian/Ubuntu)
-
-## Running it
-
-```bash
-npm install
-npm run build
-GUITHUB_DATA_DIR=./data npm start
-```
-
-Then create the first account — deliberately not possible over HTTP — and open
-<http://127.0.0.1:8080>:
-
-```bash
-GUITHUB_DATA_DIR=./data npm run create-admin -- \
-  --username you --name "Your Name" --email you@example.com
-```
-
-Everyone else joins by invite link from the **Members** page. There is no public sign-up.
-
-If `node --version` reports something older than 20, the server says so and stops
-rather than failing further in. Note that a version manager like nvm only applies to
-shells that read your profile, so `/usr/bin/node` and systemd may still see an older
-one.
-
-### Scripts
-
-| Command | What it does |
-|---|---|
-| `npm run build` | Builds core, then server, then the web UI, in that order |
-| `npm test` | Runs every test. Needs no build — see below |
-| `npm run typecheck` | Typechecks all three packages without emitting |
-| `npm start` | Runs the built server |
-| `npm run create-admin` | Creates the first administrator (needs a shell on the server) |
-| `npm run clean` | Removes all build output |
-
-### Development
-
-```bash
-npm run build -w @guithub/core     # the running server and the UI build need this
-npm start                          # API on :8080
-npm run dev -w @guithub/web        # UI on :5173, proxying /api to :8080
-```
-
-The test suite resolves `@guithub/core` to its TypeScript source rather than its
-build output, so `npm test` works on a fresh clone with nothing built and never runs
-against a stale `dist`. The published entry point is covered by `npm run build`.
-
-### Configuration
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `GUITHUB_DATA_DIR` | `./data` | Song repositories and the SQLite database |
-| `GUITHUB_HOST` | `127.0.0.1` | Bind address |
-| `GUITHUB_PORT` | `8080` | Port |
-| `GUITHUB_SECURE_COOKIES` | `false` | Set `true` when served over HTTPS |
-| `GUITHUB_TRUST_PROXY` | `false` | Set `true` behind a reverse proxy, so rate limiting sees real client IPs |
-| `GUITHUB_PUBLIC_URL` | (derived) | Origin used to build invite links, e.g. `https://tabs.example.com` |
-| `GUITHUB_WEB_ROOT` | `packages/web/dist` | Built UI assets |
-
 ## Using the site
 
 GuitHub lives at **https://guithub.us**. Sign in with the username and password you
@@ -168,14 +104,6 @@ byte, exactly as it was uploaded. Open it in Guitar Pro as normal.
 **Change your password.** Click your name in the top bar. You need your current
 password, and changing it signs out any other browser you were signed in on — which is
 what you want if the reason you are changing it is that the old one got out.
-
-### Updating the live site
-
-```bash
-ssh <user>@<server> 'cd /opt/guithub && git pull && docker compose up -d --build'
-```
-
-Songs and accounts live in `data/`, which is untouched by a rebuild.
 
 ## Accounts and invites
 
