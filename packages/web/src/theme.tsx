@@ -77,21 +77,30 @@ function color(hex: string): alphaTab.model.Color {
  * colour resource is set explicitly rather than relying on defaults, so nothing —
  * noteheads, stems, beams, slurs, clefs, tab numbers, staff lines, bar numbers —
  * is left black when the background is dark.
+ *
+ * `staffLine` deserves particular care: alphaTab paints ledger lines through
+ * `BarSubElement.StandardNotationStaffLine`, the same resource as the staff itself,
+ * so there is no way to colour them separately. A staff colour chosen to sit quietly
+ * behind the notation also dims the ledger lines, and those carry pitch — a note
+ * three ledger lines above the staff is unreadable without them. Printed engraving
+ * draws staff lines in the same ink as the notes for exactly this reason, so these
+ * stay close to the glyph colour. Every value here clears 3:1 against its sheet
+ * (WCAG 1.4.11 for meaningful non-text graphics); the staff lines are near 10:1.
  */
 const SCORE_COLORS: Record<Theme, Record<string, string>> = {
   dark: {
     mainGlyph: '#eceef6',
-    secondaryGlyph: '#a9b0c6',
-    staffLine: '#5a6178',
-    barSeparator: '#98a0b8',
+    secondaryGlyph: '#c0c7db',
+    staffLine: '#c2c9dc',
+    barSeparator: '#c2c9dc',
     barNumber: '#8fa9ff',
     scoreInfo: '#eceef6'
   },
   light: {
     mainGlyph: '#12131a',
-    secondaryGlyph: '#54596b',
-    staffLine: '#9aa0b4',
-    barSeparator: '#3a3f52',
+    secondaryGlyph: '#3f4455',
+    staffLine: '#4a5063',
+    barSeparator: '#4a5063',
     barNumber: '#b3261e',
     scoreInfo: '#12131a'
   }
