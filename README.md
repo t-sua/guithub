@@ -145,13 +145,37 @@ GuitHub is a stateful single-node app: it drives the `git` binary over bare
 repositories and keeps its index in SQLite. It needs a persistent disk and exactly one
 instance. That rules out serverless platforms — Cloud Run, which Firebase App Hosting
 runs on, has no persistent disk, and its filesystem is wiped when an instance stops.
-A small VPS is the right home; ~$6/month covers everything.
+A small VPS is the right home; about €6/month covers the server, its IPv4 address and
+an annualised domain, with backups free under Cloudflare R2's 10 GB tier.
 
 ### 1. A server
 
-Any provider works. Hetzner CX22 (~€4/mo) or a DigitalOcean 2 GB droplet — **not** the
-1 GB tier, where `npm ci` plus the Vite build plus compiling `better-sqlite3` will run
-out of memory. Ubuntu 24.04 LTS.
+Any provider works. GuitHub needs a persistent disk, the `git` binary, Docker, and
+**at least 2 GB of RAM** — not for running it, but for building it: `npm ci` plus the
+Vite build plus compiling `better-sqlite3` will run out of memory in 1 GB.
+
+The value pick as of 2026 is a **Hetzner CAX11** (ARM Ampere, 2 vCPU / 4 GB / 40 GB
+NVMe, ~€4.49/mo plus ~€0.60 for an IPv4 address) in Falkenstein or Helsinki, running
+Ubuntu 24.04 LTS.
+
+Two things about Hetzner's current lineup are easy to trip over:
+
+- **CX22 is gone.** It and the rest of CX Gen2 / CPX Gen1 stopped taking new orders on
+  1 January 2026. Plenty of tutorials still name it. Its direct successor is CX23.
+- **The cheap lines are Europe-only.** Ashburn and Hillsboro sell only Hetzner's AMD
+  families (CPX, CCX); CX is Intel and CAX is ARM, and both exist only in Germany and
+  Finland. After two price rises in 2026 the cheapest US Hetzner box comparable to a
+  CAX11 is a CPX22 at ~€19.49/mo — about four times the price. **If you want US
+  hosting, use DigitalOcean's 2 GB droplet ($12/mo) or Vultr's ($10/mo) instead**;
+  Hetzner is no longer the bargain there.
+
+ARM is not a compromise here: `node:22-bookworm-slim` and `caddy:2-alpine` both publish
+`arm64` images, and the only native dependency, `better-sqlite3`, is compiled during the
+build. The image is built on the server, so the architecture takes care of itself.
+
+Latency from North America to a European box is roughly 130–150 ms. That lands on page
+loads and uploads only — alphaTab engraves the score in the browser, so reading and
+scrolling a tab stay instant wherever the server is.
 
 ```bash
 adduser guithub && usermod -aG sudo guithub     # then log in as this user
