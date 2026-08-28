@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { diffSongs, type CanonicalSong } from '@guithub/core';
 import type { Db, SongRow } from './db.js';
@@ -8,7 +9,6 @@ import {
   SESSION_COOKIE,
   SESSION_DAYS,
   authenticate,
-  countUsers,
   createSession,
   createUser,
   deleteSession,
@@ -24,6 +24,15 @@ import {
   recordVersion,
   repoDirFor
 } from './library.js';
+import {
+  INVITE_TTL_DAYS,
+  InviteError,
+  acceptInvite,
+  createInvite,
+  findUsableInvite,
+  listInvites,
+  revokeInvite
+} from './invites.js';
 import { blameTrack, listVersions, readTextAt } from './history.js';
 import {
   ACCEPTED_EXTENSIONS,
@@ -40,6 +49,10 @@ export interface AppOptions {
   readonly maxUploadBytes?: number;
   /** Set false when serving over plain HTTP on a trusted LAN. */
   readonly secureCookies?: boolean;
+  /** Enable when running behind a reverse proxy such as Caddy. */
+  readonly trustProxy?: boolean;
+  /** Absolute origin used to build invite links, e.g. https://tabs.example.com */
+  readonly publicUrl?: string;
   readonly logger?: boolean;
 }
 
@@ -57,10 +70,14 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   const app = Fastify({
     logger: options.logger ?? false,
-    bodyLimit: 1024 * 1024
+    bodyLimit: 1024 * 1024,
+    // Caddy terminates TLS in front of this. Without trusting it, every request
+    // appears to come from the proxy and rate limiting would key on a single IP.
+    trustProxy: options.trustProxy ?? false
   });
 
   await app.register(cookie);
+  await app.register(rateLimit, { global: false });
   await app.register(multipart, {
     limits: { fileSize: maxUploadBytes, files: 1, fields: 10 }
   });
@@ -101,7 +118,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     password: z.string().min(1).max(512)
   });
 
-  app.post('/api/login', async (request, reply) => {
+  /** Slow enough to make guessing pointless, loose enough to survive a typo. */
+  const strictLimit = {
+    rateLimit: { max: 10, timeWindow: '5 minutes' }
+  } as const;
+
+  app.post('/api/login', { config: strictLimit }, async (request, reply) => {
     const parsed = credentialsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Enter a username and password.' });
 
@@ -130,22 +152,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       .regex(/^[a-zA-Z0-9_-]+$/, 'Use letters, numbers, dashes or underscores.'),
     displayName: z.string().min(1).max(64),
     email: z.string().email().max(200),
-    password: z.string().min(8).max(512),
-    isAdmin: z.boolean().optional()
+    password: z.string().min(8).max(512)
   });
 
   /**
-   * Account creation. The very first account is allowed through unauthenticated so a
-   * fresh instance can be set up; after that it is admin-only. There is no public
-   * signup: this is a band's instance, not a service.
+   * Adds a member directly. Admin only, with no unauthenticated path — not even when
+   * the user table is empty. An endpoint that hands admin to its first caller is a
+   * land grab on a public URL; the first administrator is created with the
+   * `create-admin` CLI, which requires access to the server itself.
    */
   app.post('/api/users', async (request, reply) => {
-    const isFirstUser = countUsers(db) === 0;
-    if (!isFirstUser) {
-      const user = requireUser(request, reply);
-      if (!user) return;
-      if (!user.isAdmin) return reply.code(403).send({ error: 'Only an admin can add members.' });
-    }
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Only an admin can add members.' });
 
     const parsed = newUserSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -153,11 +172,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     }
 
     try {
-      const created = await createUser(db, { ...parsed.data, isAdmin: isFirstUser || parsed.data.isAdmin === true });
-      if (isFirstUser) {
-        const session = createSession(db, created.id);
-        setSessionCookie(reply, session.id);
-      }
+      const created = await createUser(db, { ...parsed.data, isAdmin: false });
       return reply.code(201).send({ user: created });
     } catch (error) {
       if (String(error).includes('UNIQUE')) {
@@ -172,7 +187,94 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     return { users: listUsers(db) };
   });
 
-  app.get('/api/setup', async () => ({ needsFirstUser: countUsers(db) === 0 }));
+  // -------------------------------------------------------------------------
+  // Invites
+  // -------------------------------------------------------------------------
+
+  function inviteUrl(request: FastifyRequest, token: string): string {
+    if (options.publicUrl) return `${options.publicUrl.replace(/\/$/, '')}/invite/${token}`;
+    const host = request.headers.host ?? 'localhost';
+    return `${request.protocol}://${host}/invite/${token}`;
+  }
+
+  /** Issues a single-use invite link. The token is returned here and nowhere else. */
+  app.post('/api/invites', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Only an admin can invite people.' });
+
+    const parsed = z
+      .object({ label: z.string().max(100).optional() })
+      .safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid invite.' });
+
+    const { token, invite } = createInvite(db, {
+      createdBy: user.id,
+      label: parsed.data.label ?? ''
+    });
+    return reply.code(201).send({
+      invite,
+      url: inviteUrl(request, token),
+      expiresInDays: INVITE_TTL_DAYS
+    });
+  });
+
+  app.get('/api/invites', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Only an admin can see invites.' });
+    return { invites: listInvites(db) };
+  });
+
+  app.delete('/api/invites/:id', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Only an admin can revoke invites.' });
+    const { id } = request.params as { id: string };
+    if (!revokeInvite(db, id)) {
+      return reply.code(404).send({ error: 'No such pending invite.' });
+    }
+    return { ok: true };
+  });
+
+  /** Checks a link without consuming it, so the sign-up page can explain itself. */
+  app.get('/api/invites/:token', { config: strictLimit }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+    try {
+      const invite = findUsableInvite(db, token);
+      return { ok: true, label: invite.label };
+    } catch (error) {
+      if (error instanceof InviteError) {
+        return reply.code(404).send({ error: error.message, problem: error.problem });
+      }
+      throw error;
+    }
+  });
+
+  /** Redeems an invite. The invitee chooses their own username and password. */
+  app.post('/api/invites/accept', { config: strictLimit }, async (request, reply) => {
+    const parsed = newUserSchema
+      .extend({ token: z.string().min(10).max(200) })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid details.' });
+    }
+
+    try {
+      const user = await acceptInvite(db, parsed.data);
+      const session = createSession(db, user.id);
+      setSessionCookie(reply, session.id);
+      return reply.code(201).send({ user });
+    } catch (error) {
+      if (error instanceof InviteError) {
+        return reply.code(400).send({ error: error.message, problem: error.problem });
+      }
+      if (String(error).includes('UNIQUE')) {
+        return reply.code(409).send({ error: 'That username is already taken.' });
+      }
+      throw error;
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Songs
@@ -332,6 +434,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   app.get('/api/formats', async () => ({ accepted: ACCEPTED_EXTENSIONS }));
+
+  /** Liveness probe for the container healthcheck and uptime monitoring. */
+  app.get('/api/health', async () => ({ ok: true }));
 
   return app;
 }

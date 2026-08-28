@@ -17,6 +17,24 @@ export function relativeTime(iso: string): string {
   return `${years} year${years === 1 ? '' : 's'} ago`;
 }
 
+/**
+ * Human phrase for an instant in the future, e.g. "in 6 days". `relativeTime` only
+ * describes the past, so an expiry date passed to it collapses to "just now".
+ */
+export function timeUntil(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.round((then - Date.now()) / 1000);
+  if (seconds <= 0) return 'now';
+  if (seconds < 60) return 'in under a minute';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `in ${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} day${days === 1 ? '' : 's'}`;
+}
+
 export function exactTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();

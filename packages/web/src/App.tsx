@@ -7,6 +7,7 @@ import { SongsPage } from './pages/Songs.js';
 import { SongPage } from './pages/Song.js';
 import { ComparePage } from './pages/Compare.js';
 import { BlamePage } from './pages/Blame.js';
+import { InvitePage } from './pages/Invite.js';
 
 export function App() {
   return (
@@ -57,7 +58,17 @@ function Shell() {
   const { user, loading, signOut } = useAuth();
 
   if (loading) return <div className="container">Loading…</div>;
-  if (!user) return <LoginPage />;
+
+  // Accepting an invite has to work for someone with no account yet, so this route
+  // sits outside the sign-in gate.
+  if (!user) {
+    return (
+      <Routes>
+        <Route path="/invite/:token" element={<InvitePage />} />
+        <Route path="*" element={<LoginPage />} />
+      </Routes>
+    );
+  }
 
   return (
     <AuthorColorProvider>
@@ -78,6 +89,7 @@ function Shell() {
       <Routes>
         <Route path="/" element={<SongsPage />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route path="/invite/:token" element={<Navigate to="/" replace />} />
         <Route path="/songs/:slug" element={<SongPage />} />
         <Route path="/songs/:slug/compare" element={<ComparePage />} />
         <Route path="/songs/:slug/blame" element={<BlamePage />} />

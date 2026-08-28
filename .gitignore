@@ -6,3 +6,6 @@ data/
 # Copied out of the alphaTab package by its Vite plugin on each build.
 packages/web/public/font/
 packages/web/public/soundfont/
+
+# Deployment secrets (domain, ACME email); .env.example is the template.
+.env

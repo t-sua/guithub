@@ -134,3 +134,13 @@ export interface BlameLine {
   summary: string;
   content: string;
 }
+
+export interface Invite {
+  id: string;
+  label: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  used: boolean;
+  usedAt: string | null;
+}

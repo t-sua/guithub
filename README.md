@@ -14,6 +14,8 @@ No CLI and no audio playback — a website the band signs into.
   score, with a note-level list: *"Bar 12, beat 1: string 5, fret 7 → 9"*.
 - **Blame** — every bar coloured by the person who last changed it, or by age.
 - **Download** — any version, byte-for-byte identical to the file that was uploaded.
+- **Invite-only** — no public sign-up; admins send single-use links and the invitee
+  picks their own password.
 - **Light and dark** — the score is engraved in the theme's colours rather than being
   a white sheet pasted into a dark page. The toggle sits in the top bar and the choice
   is remembered; a first visit follows the operating system's preference.
@@ -87,8 +89,15 @@ npm run build
 GUITHUB_DATA_DIR=./data npm start
 ```
 
-Then open <http://127.0.0.1:8080>. The first account you create becomes the admin and
-can add the rest of the band from the **Members** page. There is no public signup.
+Then create the first account — deliberately not possible over HTTP — and open
+<http://127.0.0.1:8080>:
+
+```bash
+GUITHUB_DATA_DIR=./data npm run create-admin -- \
+  --username you --name "Your Name" --email you@example.com
+```
+
+Everyone else joins by invite link from the **Members** page. There is no public sign-up.
 
 If `node --version` reports something older than 20, the server says so and stops
 rather than failing further in. Note that a version manager like nvm only applies to
@@ -103,6 +112,7 @@ one.
 | `npm test` | Runs every test. Needs no build — see below |
 | `npm run typecheck` | Typechecks all three packages without emitting |
 | `npm start` | Runs the built server |
+| `npm run create-admin` | Creates the first administrator (needs a shell on the server) |
 | `npm run clean` | Removes all build output |
 
 ### Development
@@ -125,31 +135,127 @@ against a stale `dist`. The published entry point is covered by `npm run build`.
 | `GUITHUB_HOST` | `127.0.0.1` | Bind address |
 | `GUITHUB_PORT` | `8080` | Port |
 | `GUITHUB_SECURE_COOKIES` | `false` | Set `true` when served over HTTPS |
+| `GUITHUB_TRUST_PROXY` | `false` | Set `true` behind a reverse proxy, so rate limiting sees real client IPs |
+| `GUITHUB_PUBLIC_URL` | (derived) | Origin used to build invite links, e.g. `https://tabs.example.com` |
 | `GUITHUB_WEB_ROOT` | `packages/web/dist` | Built UI assets |
 
 ## Deploying
 
-`deploy/guithub.service` is a hardened systemd unit and `deploy/Caddyfile` puts Caddy
-in front of it with automatic HTTPS. Both need the hostname and paths adjusted.
+GuitHub is a stateful single-node app: it drives the `git` binary over bare
+repositories and keeps its index in SQLite. It needs a persistent disk and exactly one
+instance. That rules out serverless platforms — Cloud Run, which Firebase App Hosting
+runs on, has no persistent disk, and its filesystem is wiped when an instance stops.
+A small VPS is the right home; ~$6/month covers everything.
+
+### 1. A server
+
+Any provider works. Hetzner CX22 (~€4/mo) or a DigitalOcean 2 GB droplet — **not** the
+1 GB tier, where `npm ci` plus the Vite build plus compiling `better-sqlite3` will run
+out of memory. Ubuntu 24.04 LTS.
 
 ```bash
-sudo cp deploy/guithub.service /etc/systemd/system/
-sudo systemctl enable --now guithub
+adduser guithub && usermod -aG sudo guithub     # then log in as this user
+sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
+sudo apt update && sudo apt install -y unattended-upgrades
+# SSH keys only:
+sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
 ```
+
+Log out and back in so the `docker` group applies.
+
+### 2. A domain
+
+Register one (~$10–15/yr; Cloudflare Registrar sells at cost). Point an `A` record at
+the server's IP, **DNS-only** — if you use Cloudflare, leave the cloud grey so Caddy
+can complete the ACME challenge directly.
+
+### 3. Deploy
+
+```bash
+sudo mkdir -p /opt/guithub && sudo chown "$USER" /opt/guithub
+git clone https://github.com/t-sua/guithub /opt/guithub && cd /opt/guithub
+cp .env.example .env && $EDITOR .env          # set GUITHUB_DOMAIN and ACME_EMAIL
+mkdir -p data                                  # must be owned by uid 1000
+docker compose up -d --build
+```
+
+Caddy gets a certificate on first request. Then create the one account that cannot be
+created over the network:
+
+```bash
+docker compose exec guithub npm run create-admin --   --username you --name "Your Name" --email you@example.com
+```
+
+It prints a generated password once. Sign in, then invite everyone else.
+
+### Updating
+
+```bash
+cd /opt/guithub && git pull && docker compose up -d --build
+```
+
+About a minute of downtime. Logs: `docker compose logs -f guithub`.
+
+## Accounts and invites
+
+**There is no public sign-up, and no unauthenticated way to create an account** — not
+even on an empty database. An endpoint that grants admin to its first caller is a land
+grab on a public URL, so the first administrator is made with `create-admin`, which
+requires a shell on the server.
+
+Everyone else joins by invite. An admin creates a link on the **Members** page and
+sends it over; the invitee picks their own username and password, so nobody ever
+handles anyone else's credentials. Links are single-use, expire after 7 days, and can
+be revoked. Only the SHA-256 of a token is stored, so a copy of the database — a
+backup, a stolen disk — cannot be used to claim an invite.
+
+Repeated failed logins are rate limited.
 
 ## Backups
 
 `scripts/backup.sh <data-dir> <backup-dir>` writes a dated directory containing a
 `git bundle` of every song and a consistent copy of the database. Each bundle is a
-complete, self-contained clone: it can be restored with plain `git clone` even
-without GuitHub.
+complete, self-contained clone: it can be restored with plain `git clone` even without
+GuitHub.
+
+`scripts/offsite-backup.sh <data-dir>` wraps that with [restic](https://restic.net),
+pushing an encrypted, deduplicated copy to object storage and applying retention.
+Cloudflare R2 gives 10 GB free, which is a decade of tabs many times over. Put the
+credentials in a root-only `/etc/guithub/backup.env` — never in git:
 
 ```bash
-15 3 * * * /opt/guithub/scripts/backup.sh /var/lib/guithub /mnt/backup/guithub
+RESTIC_REPOSITORY=s3:https://<account>.r2.cloudflarestorage.com/guithub-backup
+RESTIC_PASSWORD=<long passphrase — without it the backup is unreadable>
+AWS_ACCESS_KEY_ID=<R2 access key>
+AWS_SECRET_ACCESS_KEY=<R2 secret key>
+HEALTHCHECK_URL=https://hc-ping.com/<uuid>          # optional but recommended
 ```
 
-Restore instructions are written into every backup as `MANIFEST.txt`. **Run the
-restore once, on purpose, before you need it.** This is the band's writing history.
+Run it nightly with a systemd timer (or cron):
+
+```
+0 3 * * * /opt/guithub/scripts/offsite-backup.sh /opt/guithub/data
+```
+
+The `HEALTHCHECK_URL` matters more than it looks. A backup that has been failing
+silently for three months is worse than no backup, because you believe you are covered.
+[healthchecks.io](https://healthchecks.io) is free and emails you when a run is missed.
+
+### Do the restore drill
+
+**Before you rely on any of this, restore it once on purpose.**
+
+```bash
+restic snapshots
+restic restore latest --target /tmp/drill
+git clone /tmp/drill/**/songs/<song-id>.bundle /tmp/recovered
+ls /tmp/recovered            # song.json, structure.tab, tracks/, original.gp
+```
+
+Open the recovered `.gp` in Guitar Pro. If it plays, your backups work. This is a
+decade of the band's writing; it deserves a rehearsal rather than a hope.
 
 ## Layout
 
@@ -159,7 +265,8 @@ packages/server/   API, git storage, SQLite, auth
 packages/web/      React UI and the alphaTab renderer
 fixtures/          test corpus (.atex sources and the .gp files built from them)
 scripts/           backup and development helpers
-deploy/            systemd unit and Caddyfile
+deploy/            Caddyfile
+Dockerfile, docker-compose.yml
 ```
 
 ## Tests

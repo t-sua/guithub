@@ -1,0 +1,50 @@
+# GuitHub: one app container behind Caddy, which handles TLS.
+#
+# Copy .env.example to .env and set GUITHUB_DOMAIN and ACME_EMAIL before starting.
+#
+#   docker compose up -d --build
+#   docker compose exec guithub npm run create-admin -- \
+#     --username <you> --name "<Your Name>" --email <you@example.com>
+
+services:
+  guithub:
+    build: .
+    restart: unless-stopped
+    # uid 1000 matches the `node` user in the image and the first non-root user on
+    # a stock Ubuntu server. git refuses to open a repository owned by someone else,
+    # so this must match the owner of ./data.
+    user: "1000:1000"
+    environment:
+      GUITHUB_DATA_DIR: /data
+      GUITHUB_HOST: 0.0.0.0
+      GUITHUB_PORT: 8080
+      # Caddy terminates TLS, so cookies may be marked Secure and the real client
+      # IP arrives in X-Forwarded-For.
+      GUITHUB_SECURE_COOKIES: "true"
+      GUITHUB_TRUST_PROXY: "true"
+      GUITHUB_PUBLIC_URL: "https://${GUITHUB_DOMAIN:?set GUITHUB_DOMAIN in .env}"
+    volumes:
+      - ./data:/data
+    # Not published to the host: only Caddy can reach it.
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - guithub
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      GUITHUB_DOMAIN: ${GUITHUB_DOMAIN:?set GUITHUB_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

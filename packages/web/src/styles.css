@@ -264,6 +264,9 @@ button, input, select, textarea { font: inherit; }
 .version-row:hover { background: var(--bg-input); }
 .version-row--active { border-color: var(--accent-dim); background: rgba(124, 156, 255, 0.08); }
 .version-row__main { flex: 1; min-width: 0; }
+/* The two lines are spans so the whole row can be a button; make them stack. */
+.version-row__main > .version-row__message,
+.version-row__main > .version-row__meta { display: block; }
 .version-row__message { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-row__meta { color: var(--text-faint); font-size: 13px; }
 .version-row__hash { font-family: var(--mono); font-size: 12px; color: var(--text-faint); }

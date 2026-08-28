@@ -8,12 +8,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "start": "node dist/main.js",
-    "dev": "node --watch dist/main.js"
+    "dev": "node --watch dist/main.js",
+    "create-admin": "node dist/cli/create-admin.js"
   },
   "dependencies": {
     "@coderline/alphatab": "^1.8.4",
     "@fastify/cookie": "^11.0.2",
     "@fastify/multipart": "^9.0.3",
+    "@fastify/rate-limit": "^11.2.0",
     "@fastify/static": "^10.1.3",
     "@guithub/core": "*",
     "better-sqlite3": "^11.8.1",

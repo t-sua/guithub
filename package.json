@@ -11,6 +11,7 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "start": "node packages/server/dist/main.js",
+    "create-admin": "npm run create-admin -w @guithub/server --",
     "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo"
   },
   "engines": {

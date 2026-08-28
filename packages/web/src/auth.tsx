@@ -6,7 +6,6 @@ import type { User } from './types.js';
 interface AuthState {
   readonly user: User | null;
   readonly loading: boolean;
-  readonly needsFirstUser: boolean;
   readonly signIn: (username: string, password: string) => Promise<void>;
   readonly signOut: () => Promise<void>;
   readonly refresh: () => Promise<void>;
@@ -16,13 +15,11 @@ const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [needsFirstUser, setNeedsFirstUser] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const [me, setup] = await Promise.all([api.me(), api.setup()]);
+    const me = await api.me();
     setUser(me.user);
-    setNeedsFirstUser(setup.needsFirstUser);
   }, []);
 
   useEffect(() => {
@@ -33,11 +30,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading,
-      needsFirstUser,
       signIn: async (username, password) => {
         const result = await api.login(username, password);
         setUser(result.user);
-        setNeedsFirstUser(false);
       },
       signOut: async () => {
         await api.logout();
@@ -45,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       refresh
     }),
-    [user, loading, needsFirstUser, refresh]
+    [user, loading, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

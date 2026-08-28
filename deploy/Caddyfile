@@ -1,28 +1,30 @@
 # Caddy obtains and renews a TLS certificate automatically.
-# Replace the hostname with your own.
+# The hostname comes from GUITHUB_DOMAIN in .env.
 
-tabs.example.com {
+{
+	email {$ACME_EMAIL}
+}
+
+{$GUITHUB_DOMAIN} {
 	encode gzip
 
-	# Uploads are capped server-side too; this keeps oversized bodies from ever
+	# Uploads are capped in the app too; this stops an oversized body ever
 	# reaching Node.
 	request_body {
 		max_size 25MB
 	}
 
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy guithub:8080
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	log {
+		output stdout
 	}
 }
-
-# For a LAN-only instance with no public domain, use this instead and set
-# GUITHUB_SECURE_COOKIES=false:
-#
-# :80 {
-# 	reverse_proxy 127.0.0.1:8080
-# }

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, isCommitish, isTrackPath, sanitiseFilename } from '../src/app.js';
 import { openDatabase, type Db } from '../src/db.js';
+import { createUser } from '../src/auth.js';
+import { createInvite } from '../src/invites.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures');
 
@@ -26,20 +28,27 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-/** Creates the first (admin) account and returns its session cookie. */
+const ADMIN_PASSWORD = 'correct horse battery staple';
+
+/**
+ * Seeds the first admin the way the real deployment does — directly, via the CLI path
+ * — because there is deliberately no unauthenticated HTTP route that creates one.
+ */
 async function signUpFirstUser(): Promise<string> {
-  const response = await app.inject({
-    method: 'POST',
-    url: '/api/users',
-    payload: {
-      username: 'alice',
-      displayName: 'Alice',
-      email: 'alice@band.test',
-      password: 'correct horse battery staple'
-    }
+  await createUser(db, {
+    username: 'alice',
+    displayName: 'Alice',
+    email: 'alice@band.test',
+    password: ADMIN_PASSWORD,
+    isAdmin: true
   });
-  expect(response.statusCode).toBe(201);
-  return response.cookies[0]!.value;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/api/login',
+    payload: { username: 'alice', password: ADMIN_PASSWORD }
+  });
+  expect(login.statusCode).toBe(200);
+  return login.cookies[0]!.value;
 }
 
 async function addMember(cookie: string, username: string): Promise<string> {
@@ -105,18 +114,30 @@ async function uploadVersion(
 }
 
 describe('setup and authentication', () => {
-  it('reports that a fresh instance needs its first account', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/setup' });
-    expect(response.json()).toEqual({ needsFirstUser: true });
+  it('refuses to create an account over HTTP even with an empty database', async () => {
+    // The regression that matters most for a public deployment: there must be no
+    // unauthenticated path to an account, or the first stranger to find the host
+    // becomes the admin of the instance.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      payload: {
+        username: 'mallory',
+        displayName: 'Mallory',
+        email: 'm@example.test',
+        password: 'let me in please'
+      }
+    });
+    expect(response.statusCode).toBe(401);
+
+    const me = await app.inject({ method: 'GET', url: '/api/me' });
+    expect(me.json().user).toBeNull();
   });
 
-  it('makes the first account an admin and signs it in', async () => {
+  it('signs in the seeded admin', async () => {
     const cookie = await signUpFirstUser();
     const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: cookie } });
     expect(me.json().user).toMatchObject({ username: 'alice', isAdmin: true });
-
-    const setup = await app.inject({ method: 'GET', url: '/api/setup' });
-    expect(setup.json()).toEqual({ needsFirstUser: false });
   });
 
   it('refuses a second account created by a stranger', async () => {
@@ -153,7 +174,7 @@ describe('setup and authentication', () => {
 
   it('locks every song endpoint behind a session', async () => {
     await signUpFirstUser();
-    for (const url of ['/api/songs', '/api/songs/anything', '/api/users']) {
+    for (const url of ['/api/songs', '/api/songs/anything', '/api/users', '/api/invites']) {
       const response = await app.inject({ method: 'GET', url });
       expect(response.statusCode, url).toBe(401);
     }
@@ -164,6 +185,144 @@ describe('setup and authentication', () => {
     await app.inject({ method: 'POST', url: '/api/logout', cookies: { guithub_session: cookie } });
     const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: cookie } });
     expect(me.json().user).toBeNull();
+  });
+});
+
+describe('invites', () => {
+  async function issueInvite(cookie: string, label = 'bass player'): Promise<string> {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/invites',
+      cookies: { guithub_session: cookie },
+      payload: { label }
+    });
+    expect(response.statusCode).toBe(201);
+    const url = response.json().url as string;
+    return url.slice(url.lastIndexOf('/') + 1);
+  }
+
+  const accept = (token: string, username = 'dave') =>
+    app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      payload: {
+        token,
+        username,
+        displayName: 'Dave Okafor',
+        email: `${username}@band.test`,
+        password: 'a perfectly fine passphrase'
+      }
+    });
+
+  it('lets an invited person choose their own account and signs them in', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+
+    const check = await app.inject({ method: 'GET', url: `/api/invites/${token}` });
+    expect(check.json()).toMatchObject({ ok: true, label: 'bass player' });
+
+    const response = await accept(token);
+    expect(response.statusCode).toBe(201);
+    expect(response.json().user).toMatchObject({ username: 'dave', isAdmin: false });
+
+    const cookie = response.cookies[0]!.value;
+    const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: cookie } });
+    expect(me.json().user).toMatchObject({ username: 'dave' });
+  });
+
+  it('never grants admin through an invite', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+    // Even when the caller asks for it.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/invites/accept',
+      payload: {
+        token,
+        username: 'dave',
+        displayName: 'Dave',
+        email: 'd@band.test',
+        password: 'a perfectly fine passphrase',
+        isAdmin: true
+      }
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().user.isAdmin).toBe(false);
+  });
+
+  it('accepts an invite exactly once', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+
+    expect((await accept(token, 'dave')).statusCode).toBe(201);
+    const second = await accept(token, 'mallory');
+    expect(second.statusCode).toBe(400);
+    expect(second.json().problem).toBe('used');
+  });
+
+  it('refuses an unknown token', async () => {
+    await signUpFirstUser();
+    const response = await accept('not-a-real-token-at-all');
+    expect(response.statusCode).toBe(400);
+    expect(response.json().problem).toBe('unknown');
+  });
+
+  it('refuses an expired invite', async () => {
+    const alice = await signUpFirstUser();
+    const me = await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: alice } });
+    const adminId = me.json().user.id as string;
+    // Issued far enough in the past that it has lapsed.
+    const { token } = createInvite(db, {
+      createdBy: adminId,
+      ttlDays: 7,
+      now: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    });
+
+    const response = await accept(token);
+    expect(response.statusCode).toBe(400);
+    expect(response.json().problem).toBe('expired');
+  });
+
+  it('stores only the hash of a token', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+    const rows = db.prepare('SELECT token_hash FROM invites').all() as { token_hash: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.token_hash).not.toBe(token);
+    expect(rows[0]!.token_hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('only lets an admin issue or list invites', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+    const dave = (await accept(token)).cookies[0]!.value;
+
+    for (const [method, url] of [
+      ['POST', '/api/invites'],
+      ['GET', '/api/invites']
+    ] as const) {
+      const response = await app.inject({ method, url, cookies: { guithub_session: dave }, payload: {} });
+      expect(response.statusCode, `${method} ${url}`).toBe(403);
+    }
+  });
+
+  it('revokes a pending invite', async () => {
+    const alice = await signUpFirstUser();
+    const token = await issueInvite(alice);
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/api/invites',
+      cookies: { guithub_session: alice }
+    });
+    const id = listed.json().invites[0].id as string;
+
+    const revoked = await app.inject({
+      method: 'DELETE',
+      url: `/api/invites/${id}`,
+      cookies: { guithub_session: alice }
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect((await accept(token)).statusCode).toBe(400);
   });
 });
 

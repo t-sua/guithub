@@ -71,16 +71,29 @@ export function toPublicUser(row: UserRow): PublicUser {
   };
 }
 
-export async function createUser(
-  db: Db,
-  input: {
-    username: string;
-    displayName: string;
-    email: string;
-    password: string;
-    isAdmin?: boolean;
-  }
-): Promise<PublicUser> {
+export interface NewUser {
+  username: string;
+  displayName: string;
+  email: string;
+  password: string;
+  isAdmin?: boolean;
+}
+
+export interface PreparedUser {
+  readonly row: UserRow;
+  readonly publicUser: PublicUser;
+  /**
+   * Inserts the row. Synchronous on purpose: better-sqlite3 transactions cannot span
+   * an await, so hashing happens first and only this call runs inside the transaction.
+   */
+  readonly insert: () => void;
+}
+
+/**
+ * Hashes the password and builds the row without writing it, so callers that must
+ * insert inside a transaction (redeeming an invite) can do the slow part beforehand.
+ */
+export async function prepareUser(db: Db, input: NewUser): Promise<PreparedUser> {
   const row: UserRow = {
     id: randomUUID(),
     username: input.username,
@@ -90,11 +103,17 @@ export async function createUser(
     is_admin: input.isAdmin ? 1 : 0,
     created_at: new Date().toISOString()
   };
-  db.prepare(
+  const statement = db.prepare(
     `INSERT INTO users (id, username, display_name, email, password_hash, is_admin, created_at)
      VALUES (@id, @username, @display_name, @email, @password_hash, @is_admin, @created_at)`
-  ).run(row);
-  return toPublicUser(row);
+  );
+  return { row, publicUser: toPublicUser(row), insert: () => void statement.run(row) };
+}
+
+export async function createUser(db: Db, input: NewUser): Promise<PublicUser> {
+  const prepared = await prepareUser(db, input);
+  prepared.insert();
+  return prepared.publicUser;
 }
 
 export function findUserByUsername(db: Db, username: string): UserRow | undefined {

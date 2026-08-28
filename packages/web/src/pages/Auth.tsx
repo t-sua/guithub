@@ -1,15 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.js';
+import { timeUntil } from '../format.js';
+import type { Invite, User } from '../types.js';
 
 export function LoginPage() {
-  const { signIn, needsFirstUser } = useAuth();
+  const { signIn } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  if (needsFirstUser) return <FirstUserPage />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -56,130 +56,75 @@ export function LoginPage() {
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Shown only while the instance has no accounts at all. The first person through
- * becomes the admin and can then add the rest of the band.
- */
-function FirstUserPage() {
-  const { refresh } = useAuth();
-  const [form, setForm] = useState({
-    username: '',
-    displayName: '',
-    email: '',
-    password: ''
-  });
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await api.createUser(form);
-      await refresh();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not create the account.');
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="container">
-      <div className="card auth-card">
-        <h1>Set up GuitHub</h1>
-        <p className="sub">
-          This instance has no accounts yet. Create yours — you'll be the admin and can add
-          the rest of the band afterwards.
+        <p className="sub" style={{ marginTop: 18, marginBottom: 0 }}>
+          There is no public sign-up. Ask someone in the band for an invite link.
         </p>
-        <form onSubmit={submit}>
-          {error && <div className="error-banner">{error}</div>}
-          <div className="field">
-            <label htmlFor="displayName">Your name</label>
-            <input
-              id="displayName"
-              value={form.displayName}
-              onChange={event => setForm({ ...form, displayName: event.target.value })}
-              placeholder="Shown next to every change you make"
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="new-username">Username</label>
-            <input
-              id="new-username"
-              value={form.username}
-              onChange={event => setForm({ ...form, username: event.target.value })}
-              autoComplete="username"
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              type="email"
-              value={form.email}
-              onChange={event => setForm({ ...form, email: event.target.value })}
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="new-password">Password</label>
-            <input
-              id="new-password"
-              type="password"
-              value={form.password}
-              onChange={event => setForm({ ...form, password: event.target.value })}
-              autoComplete="new-password"
-              minLength={8}
-              required
-            />
-          </div>
-          <button className="btn btn--primary" type="submit" disabled={busy}>
-            {busy ? 'Creating…' : 'Create account'}
-          </button>
-        </form>
       </div>
     </div>
   );
 }
 
 export function MembersPage() {
-  const { user, refresh } = useAuth();
-  const [users, setUsers] = useState<Awaited<ReturnType<typeof api.listUsers>>['users']>([]);
-  const [form, setForm] = useState({ username: '', displayName: '', email: '', password: '' });
+  const { user } = useAuth();
+  const [users, setUsers] = useState<User[]>([]);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [label, setLabel] = useState('');
+  const [freshLink, setFreshLink] = useState('');
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
-  const [done, setDone] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    void api.listUsers().then(result => setUsers(result.users));
-  }, []);
+  const load = async () => {
+    const [people, pending] = await Promise.all([
+      api.listUsers(),
+      user?.isAdmin ? api.listInvites() : Promise.resolve({ invites: [] as Invite[] })
+    ]);
+    setUsers(people.users);
+    setInvites(pending.invites);
+  };
 
-  const submit = async (event: FormEvent) => {
+  useEffect(() => {
+    void load().catch((caught: unknown) =>
+      setError(caught instanceof Error ? caught.message : 'Could not load members.')
+    );
+  }, [user?.isAdmin]);
+
+  const invite = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError('');
-    setDone('');
+    setCopied(false);
     try {
-      const created = await api.createUser(form);
-      setDone(`Added ${created.user.displayName}. Give them the password you just set.`);
-      setForm({ username: '', displayName: '', email: '', password: '' });
-      const result = await api.listUsers();
-      setUsers(result.users);
-      await refresh();
+      const result = await api.createInvite(label);
+      setFreshLink(result.url);
+      setLabel('');
+      await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not add the member.');
+      setError(caught instanceof Error ? caught.message : 'Could not create the invite.');
     } finally {
       setBusy(false);
     }
   };
+
+  const revoke = async (id: string) => {
+    try {
+      await api.revokeInvite(id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not revoke the invite.');
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(freshLink);
+      setCopied(true);
+    } catch {
+      // Clipboard access can be refused; the link is on screen to copy by hand.
+    }
+  };
+
+  const pending = invites.filter(item => !item.used);
 
   return (
     <div className="container">
@@ -189,6 +134,8 @@ export function MembersPage() {
           <p>Everyone who can upload and see the songs.</p>
         </div>
       </div>
+
+      {error && <div className="error-banner">{error}</div>}
 
       <div className="layout-sidebar">
         <div className="card">
@@ -211,53 +158,62 @@ export function MembersPage() {
         </div>
 
         {user?.isAdmin && (
-          <div className="card">
-            <h2 className="panel-title">Add a member</h2>
-            <form onSubmit={submit}>
-              {error && <div className="error-banner">{error}</div>}
-              {done && <div className="notice">{done}</div>}
-              <div className="field">
-                <label htmlFor="m-name">Name</label>
-                <input
-                  id="m-name"
-                  value={form.displayName}
-                  onChange={event => setForm({ ...form, displayName: event.target.value })}
-                  required
-                />
+          <div>
+            <div className="card">
+              <h2 className="panel-title">Invite someone</h2>
+              <form onSubmit={invite}>
+                <div className="field">
+                  <label htmlFor="invite-label">Who is it for? (optional)</label>
+                  <input
+                    id="invite-label"
+                    value={label}
+                    onChange={event => setLabel(event.target.value)}
+                    placeholder="Dave, bass"
+                  />
+                </div>
+                <button className="btn btn--primary" type="submit" disabled={busy}>
+                  {busy ? 'Creating…' : 'Create invite link'}
+                </button>
+              </form>
+
+              {freshLink && (
+                <div className="notice" style={{ marginTop: 16 }}>
+                  <p style={{ margin: '0 0 8px' }}>
+                    Send them this link. It works once, and only for the next 7 days —
+                    it is not shown again.
+                  </p>
+                  <div className="bar-line" style={{ marginBottom: 8 }}>{freshLink}</div>
+                  <button type="button" className="btn btn--small" onClick={() => void copy()}>
+                    {copied ? 'Copied' : 'Copy link'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {pending.length > 0 && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <h2 className="panel-title">Pending invites</h2>
+                <div className="version-list">
+                  {pending.map(item => (
+                    <div key={item.id} className="version-row">
+                      <span className="version-row__main">
+                        <span className="version-row__message">{item.label || 'Unlabelled'}</span>
+                        <span className="version-row__meta">
+                          expires {timeUntil(item.expiresAt)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        onClick={() => void revoke(item.id)}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="field">
-                <label htmlFor="m-username">Username</label>
-                <input
-                  id="m-username"
-                  value={form.username}
-                  onChange={event => setForm({ ...form, username: event.target.value })}
-                  required
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="m-email">Email</label>
-                <input
-                  id="m-email"
-                  type="email"
-                  value={form.email}
-                  onChange={event => setForm({ ...form, email: event.target.value })}
-                  required
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="m-password">Temporary password</label>
-                <input
-                  id="m-password"
-                  value={form.password}
-                  onChange={event => setForm({ ...form, password: event.target.value })}
-                  minLength={8}
-                  required
-                />
-              </div>
-              <button className="btn btn--primary" type="submit" disabled={busy}>
-                {busy ? 'Adding…' : 'Add member'}
-              </button>
-            </form>
+            )}
           </div>
         )}
       </div>

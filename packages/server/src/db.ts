@@ -45,6 +45,19 @@ const MIGRATIONS: readonly string[] = [
     bar_count     INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX songs_updated ON songs(updated_at DESC);
+  `,
+  `
+  CREATE TABLE invites (
+    id         TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    label      TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT,
+    used_by    TEXT REFERENCES users(id)
+  );
+  CREATE INDEX invites_pending ON invites(used_at, expires_at);
   `
 ];
 

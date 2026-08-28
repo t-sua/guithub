@@ -18,12 +18,21 @@ export async function start(): Promise<void> {
   const port = Number(env('GUITHUB_PORT', '8080'));
   const host = env('GUITHUB_HOST', '127.0.0.1');
   const secureCookies = env('GUITHUB_SECURE_COOKIES', 'false') === 'true';
+  const trustProxy = env('GUITHUB_TRUST_PROXY', 'false') === 'true';
+  const publicUrl = env('GUITHUB_PUBLIC_URL', '');
   const webRoot = resolve(env('GUITHUB_WEB_ROOT', join(here, '..', '..', 'web', 'dist')));
 
   const db = openDatabase(join(dataDir, 'guithub.db'));
   pruneExpiredSessions(db);
 
-  const app = await buildApp({ db, dataDir, secureCookies, logger: true });
+  const app = await buildApp({
+    db,
+    dataDir,
+    secureCookies,
+    trustProxy,
+    ...(publicUrl ? { publicUrl } : {}),
+    logger: true
+  });
 
   if (existsSync(webRoot)) {
     await app.register(fastifyStatic, { root: webRoot });

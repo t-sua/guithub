@@ -1,6 +1,7 @@
 import type {
   BlameLine,
   CanonicalSong,
+  Invite,
   Provenance,
   Song,
   SongDiff,
@@ -42,7 +43,6 @@ function json(body: unknown): RequestInit {
 }
 
 export const api = {
-  setup: () => request<{ needsFirstUser: boolean }>('/api/setup'),
   me: () => request<{ user: User | null }>('/api/me'),
 
   login: (username: string, password: string) =>
@@ -59,6 +59,28 @@ export const api = {
   }) => request<{ user: User }>('/api/users', json(input)),
 
   listUsers: () => request<{ users: User[] }>('/api/users'),
+
+  listInvites: () => request<{ invites: Invite[] }>('/api/invites'),
+
+  createInvite: (label: string) =>
+    request<{ invite: Invite; url: string; expiresInDays: number }>(
+      '/api/invites',
+      json({ label })
+    ),
+
+  revokeInvite: (id: string) =>
+    request<{ ok: boolean }>(`/api/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  checkInvite: (token: string) =>
+    request<{ ok: boolean; label: string }>(`/api/invites/${encodeURIComponent(token)}`),
+
+  acceptInvite: (input: {
+    token: string;
+    username: string;
+    displayName: string;
+    email: string;
+    password: string;
+  }) => request<{ user: User }>('/api/invites/accept', json(input)),
 
   listSongs: () => request<{ songs: Song[] }>('/api/songs'),
 
