@@ -156,14 +156,17 @@ Vite build plus compiling `better-sqlite3` will run out of memory in 1 GB.
 
 The recommendation is a **Vultr Cloud Compute** instance, Regular Performance
 `vc2-1c-2gb` — 1 vCPU / 2 GB / 55 GB SSD / 2 TB bandwidth, **$10/mo**, running
-Ubuntu 24.04 LTS. Unlike Hetzner, Vultr includes an IPv4 address in that price.
+Ubuntu 26.04 LTS. Unlike Hetzner, Vultr includes an IPv4 address in that price.
+26.04 drops cgroup v1 entirely, which Docker CE handles natively; nothing here needs
+configuring for it.
 
 Three things are worth knowing before you click Deploy:
 
-- **Add swap before you build.** 2 GB is the build's floor, not its comfort zone, and
-  Vultr's Ubuntu images ship with no swap at all. Without it the first
-  `docker compose up -d --build` can be OOM-killed partway through `npm ci` or the Vite
-  build. The swap commands below take a minute and remove the whole class of problem.
+- **Check swap before you build.** 2 GB is the build's floor, not its comfort zone, and
+  without headroom the first `docker compose up -d --build` can be OOM-killed partway
+  through `npm ci` or the Vite build. Whether you already have swap depends on the image:
+  the 26.04 image ships a generous swapfile, older ones often have none. Run
+  `swapon --show` and only create one if it prints nothing.
 - **Vultr is x86 only.** There is no ARM shared tier, so the arm64 image question that
   mattered elsewhere does not arise here — and your laptop, if it is x86, now builds the
   same architecture the server runs.
@@ -182,22 +185,36 @@ a firewall group allowing TCP 80 and 443 from anywhere and TCP 22 from your own 
 then attach it to the instance. The two are belt and braces — `ufw` still protects you if
 the firewall group is ever detached.
 
-Vultr hands you a root password rather than a configured user, so harden it first. **Add
-your SSH key before you disable password logins**, or you will lock yourself out of your
-own server:
+**The deploy user must be uid 1000.** `docker-compose.yml` runs the container as
+`1000:1000` and git refuses to open a repository owned by anyone else, so the account that
+owns `./data` has to be uid 1000. Vultr's 26.04 image already ships one — `linuxuser`,
+with sudo — and you should use it rather than adding another: a fresh `adduser guithub`
+lands on uid 1001, and the container then cannot read its own data directory. Check what
+you have before deciding:
 
 ```bash
-adduser guithub && usermod -aG sudo guithub
-
-# Install your public key for the new user — do this BEFORE the sed below.
-install -d -m 700 -o guithub -g guithub /home/guithub/.ssh
-# From your laptop:  ssh-copy-id guithub@<server-ip>
-# or paste the key:  nano /home/guithub/.ssh/authorized_keys
-chown guithub:guithub /home/guithub/.ssh/authorized_keys && chmod 600 /home/guithub/.ssh/authorized_keys
+awk -F: '$3==1000 {print $1}' /etc/passwd    # empty means you need to create one
 ```
 
-Now open a **second terminal** and confirm `ssh guithub@<server-ip>` works while you are
-still logged in as root on the first. Only then continue — the rest runs as `guithub`:
+If it names an account, that is your deploy user. If it is empty, `adduser guithub` and
+confirm `id -u guithub` prints 1000.
+
+Then harden. **Install your SSH key before you disable password logins**, or you will
+lock yourself out of your own server. Substitute your deploy user for `<user>`:
+
+```bash
+install -d -m 700 -o <user> -g <user> /home/<user>/.ssh
+# From your laptop:  ssh-copy-id <user>@<server-ip>
+# or paste the key:  nano /home/<user>/.ssh/authorized_keys
+chown <user>:<user> /home/<user>/.ssh/authorized_keys && chmod 600 /home/<user>/.ssh/authorized_keys
+```
+
+Vultr's image puts that account in the `sudo` group but sets no password for it, so `sudo`
+will prompt for one you do not have. Either give it a password (`passwd <user>`) or keep a
+root shell open for the admin steps below.
+
+Now open a **second terminal** and confirm `ssh <user>@<server-ip>` works while you are
+still logged in as root on the first. Only then continue:
 
 ```bash
 sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
@@ -207,18 +224,25 @@ sudo apt update && sudo apt install -y unattended-upgrades
 sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sudo systemctl restart ssh
 
-# 2 GB of swap, so the build cannot be OOM-killed:
+# Swap. CHECK FIRST — if this prints a row, you already have swap; skip the
+# fallocate block below. Running fallocate against a /swapfile the kernel is
+# already using truncates it underneath the kernel, which is as bad as it sounds.
+swapon --show
+
+# Only if the above printed nothing:
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
 sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Either way, stop the kernel paging out the running server just because swap exists:
 sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
 
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
 ```
 
-Log out and back in so the `docker` group applies, then check `free -h` shows 2 GB of
-swap. `vm.swappiness=10` keeps the kernel from paging out the running server just because
-swap exists — it is there for the build spike, not for everyday use.
+Log out and back in so the `docker` group applies, then check `free -h` shows swap.
+`vm.swappiness=10` matters because swap here is for the build spike, not for everyday
+use — the running server should stay in RAM.
 
 If you ever do lock yourself out, Vultr's web console in the control panel gets you back
 in over the hypervisor without SSH. That is the safety net; it is not a plan.
