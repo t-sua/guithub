@@ -210,8 +210,18 @@ chown <user>:<user> /home/<user>/.ssh/authorized_keys && chmod 600 /home/<user>/
 ```
 
 Vultr's image puts that account in the `sudo` group but sets no password for it, so `sudo`
-will prompt for one you do not have. Either give it a password (`passwd <user>`) or keep a
-root shell open for the admin steps below.
+will prompt for one you do not have. Give it a password with `passwd <user>`, or — the
+usual posture once SSH is key-only — grant passwordless sudo:
+
+```bash
+echo '<user> ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-<user>-nopasswd
+sudo chmod 440 /etc/sudoers.d/90-<user>-nopasswd
+sudo visudo -c -f /etc/sudoers.d/90-<user>-nopasswd     # never skip this check
+```
+
+That makes your SSH key the single credential for the box, which is the trade-off it
+sounds like. `PermitRootLogin prohibit-password` above keeps root reachable by key as a
+second way in if you ever mangle the sudoers file.
 
 Now open a **second terminal** and confirm `ssh <user>@<server-ip>` works while you are
 still logged in as root on the first. Only then continue:
@@ -220,8 +230,21 @@ still logged in as root on the first. Only then continue:
 sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
 sudo apt update && sudo apt install -y unattended-upgrades
 
-# SSH keys only:
-sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+# SSH keys only. Editing sshd_config directly does NOT work here: cloud-init
+# writes /etc/ssh/sshd_config.d/50-cloud-init.conf containing
+# "PasswordAuthentication yes", the Include sits near the top of the main file,
+# and sshd honours the FIRST value it sees for a setting. So the override has to
+# be a drop-in that sorts earlier — hence 00-.
+sudo tee /etc/ssh/sshd_config.d/00-hardening.conf >/dev/null <<'CONF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+CONF
+sudo chmod 600 /etc/ssh/sshd_config.d/00-hardening.conf
+
+# Validate before restarting, and confirm the override actually won:
+sudo sshd -t && sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin)'
 sudo systemctl restart ssh
 
 # Swap. CHECK FIRST — if this prints a row, you already have swap; skip the
@@ -238,6 +261,12 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
 
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
+```
+
+Verify the lockout you were avoiding is really gone — from your laptop, this must fail:
+
+```bash
+ssh -o PubkeyAuthentication=no <user>@<server-ip>    # expect: Permission denied (publickey)
 ```
 
 Log out and back in so the `docker` group applies, then check `free -h` shows swap.
