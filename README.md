@@ -145,7 +145,7 @@ GuitHub is a stateful single-node app: it drives the `git` binary over bare
 repositories and keeps its index in SQLite. It needs a persistent disk and exactly one
 instance. That rules out serverless platforms — Cloud Run, which Firebase App Hosting
 runs on, has no persistent disk, and its filesystem is wiped when an instance stops.
-A small VPS is the right home; about €6/month covers the server, its IPv4 address and
+A small VPS is the right home; about $11/month covers the server, its IPv4 address and
 an annualised domain, with backups free under Cloudflare R2's 10 GB tier.
 
 ### 1. A server
@@ -154,40 +154,74 @@ Any provider works. GuitHub needs a persistent disk, the `git` binary, Docker, a
 **at least 2 GB of RAM** — not for running it, but for building it: `npm ci` plus the
 Vite build plus compiling `better-sqlite3` will run out of memory in 1 GB.
 
-The value pick as of 2026 is a **Hetzner CAX11** (ARM Ampere, 2 vCPU / 4 GB / 40 GB
-NVMe, ~€4.49/mo plus ~€0.60 for an IPv4 address) in Falkenstein or Helsinki, running
-Ubuntu 24.04 LTS.
+The recommendation is a **Vultr Cloud Compute** instance, Regular Performance
+`vc2-1c-2gb` — 1 vCPU / 2 GB / 55 GB SSD / 2 TB bandwidth, **$10/mo**, running
+Ubuntu 24.04 LTS. Unlike Hetzner, Vultr includes an IPv4 address in that price.
 
-Two things about Hetzner's current lineup are easy to trip over:
+Three things are worth knowing before you click Deploy:
 
-- **CX22 is gone.** It and the rest of CX Gen2 / CPX Gen1 stopped taking new orders on
-  1 January 2026. Plenty of tutorials still name it. Its direct successor is CX23.
-- **The cheap lines are Europe-only.** Ashburn and Hillsboro sell only Hetzner's AMD
-  families (CPX, CCX); CX is Intel and CAX is ARM, and both exist only in Germany and
-  Finland. After two price rises in 2026 the cheapest US Hetzner box comparable to a
-  CAX11 is a CPX22 at ~€19.49/mo — about four times the price. **If you want US
-  hosting, use DigitalOcean's 2 GB droplet ($12/mo) or Vultr's ($10/mo) instead**;
-  Hetzner is no longer the bargain there.
+- **Add swap before you build.** 2 GB is the build's floor, not its comfort zone, and
+  Vultr's Ubuntu images ship with no swap at all. Without it the first
+  `docker compose up -d --build` can be OOM-killed partway through `npm ci` or the Vite
+  build. The swap commands below take a minute and remove the whole class of problem.
+- **Vultr is x86 only.** There is no ARM shared tier, so the arm64 image question that
+  mattered elsewhere does not arise here — and your laptop, if it is x86, now builds the
+  same architecture the server runs.
+- **Pick the region before the plan.** Regular Performance is Vultr's older Intel tier
+  and is not offered in every location; if it does not appear, the same box on newer
+  hardware is High Performance `vhp-1c-2gb` (AMD or Intel, NVMe) at about $12/mo, which
+  is a fair upgrade for two dollars. High Frequency (~$18/mo) is more CPU than a tab
+  server will ever use.
 
-ARM is not a compromise here: `node:22-bookworm-slim` and `caddy:2-alpine` both publish
-`arm64` images, and the only native dependency, `better-sqlite3`, is compiled during the
-build. The image is built on the server, so the architecture takes care of itself.
+Bandwidth is 2 TB with overage at $0.01/GB. A decade of the band's tabs is measured in
+megabytes, so this is not a number you will ever look at again.
 
-Latency from North America to a European box is roughly 130–150 ms. That lands on page
-loads and uploads only — alphaTab engraves the score in the browser, so reading and
-scrolling a tab stay instant wherever the server is.
+Vultr also offers a **Cloud Firewall** in the control panel, which filters at the network
+edge before traffic reaches the instance. Using it as well as `ufw` is worthwhile: create
+a firewall group allowing TCP 80 and 443 from anywhere and TCP 22 from your own address,
+then attach it to the instance. The two are belt and braces — `ufw` still protects you if
+the firewall group is ever detached.
+
+Vultr hands you a root password rather than a configured user, so harden it first. **Add
+your SSH key before you disable password logins**, or you will lock yourself out of your
+own server:
 
 ```bash
-adduser guithub && usermod -aG sudo guithub     # then log in as this user
+adduser guithub && usermod -aG sudo guithub
+
+# Install your public key for the new user — do this BEFORE the sed below.
+install -d -m 700 -o guithub -g guithub /home/guithub/.ssh
+# From your laptop:  ssh-copy-id guithub@<server-ip>
+# or paste the key:  nano /home/guithub/.ssh/authorized_keys
+chown guithub:guithub /home/guithub/.ssh/authorized_keys && chmod 600 /home/guithub/.ssh/authorized_keys
+```
+
+Now open a **second terminal** and confirm `ssh guithub@<server-ip>` works while you are
+still logged in as root on the first. Only then continue — the rest runs as `guithub`:
+
+```bash
 sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
 sudo apt update && sudo apt install -y unattended-upgrades
+
 # SSH keys only:
 sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sudo systemctl restart ssh
+
+# 2 GB of swap, so the build cannot be OOM-killed:
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
+
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
 ```
 
-Log out and back in so the `docker` group applies.
+Log out and back in so the `docker` group applies, then check `free -h` shows 2 GB of
+swap. `vm.swappiness=10` keeps the kernel from paging out the running server just because
+swap exists — it is there for the build spike, not for everyday use.
+
+If you ever do lock yourself out, Vultr's web console in the control panel gets you back
+in over the hypervisor without SSH. That is the safety net; it is not a plan.
 
 ### 2. A domain
 
