@@ -22,7 +22,15 @@ set -euo pipefail
 
 DATA_DIR="${1:?usage: offsite-backup.sh <data-dir>}"
 CONFIG="${GUITHUB_BACKUP_ENV:-/etc/guithub/backup.env}"
-STAGING="$(mktemp -d)"
+# A fixed path, deliberately not mktemp -d. restic groups snapshots by host and
+# paths, so a fresh directory every night would put each night in a group of its
+# own; `forget` keeps its policy per group, so it would keep one snapshot from
+# every group and prune nothing, ever. The repository would grow without bound
+# while appearing to have a retention policy — the failure mode you only notice
+# when the storage bill or the free tier runs out.
+STAGING="${GUITHUB_BACKUP_STAGING:-/var/tmp/guithub-backup-staging}"
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
 trap 'rm -rf "$STAGING"' EXIT
 
 if [[ -f "$CONFIG" ]]; then
@@ -55,7 +63,11 @@ restic snapshots > /dev/null 2>&1 || restic init || fail "could not initialise r
 
 restic backup --tag guithub --host guithub "$STAGING" || fail "restic backup failed"
 
+# --group-by host,tags rather than the default host,paths: belt and braces with
+# the fixed staging path above, so retention stays correct even if the path
+# changes again some day.
 restic forget --tag guithub \
+  --group-by host,tags \
   --keep-daily 14 --keep-weekly 8 --keep-monthly 12 \
   --prune || fail "restic forget/prune failed"
 
