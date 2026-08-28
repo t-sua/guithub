@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as alphaTab from '@coderline/alphatab';
+import { applyScoreTheme, useTheme } from '../theme.js';
 
 export interface BarStripProps {
   /** Raw bytes of the tab file this bar comes from. */
@@ -23,6 +24,7 @@ export interface BarStripProps {
  * bars would otherwise build a hundred engraving engines on page load.
  */
 export function BarStrip({ data, trackIndex, bar, tone, label }: BarStripProps) {
+  const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
@@ -84,6 +86,7 @@ export function BarStrip({ data, trackIndex, bar, tone, label }: BarStripProps) 
     ]) {
       api.settings.notation.elements.set(element, false);
     }
+    applyScoreTheme(api.settings, theme);
     api.updateSettings();
 
     // alphaTab appends a "rendered by alphaTab" annotation to every score it lays
@@ -113,7 +116,7 @@ export function BarStrip({ data, trackIndex, bar, tone, label }: BarStripProps) 
       annotationWatcher.disconnect();
       api.destroy();
     };
-  }, [visible, data, bar, trackIndex]);
+  }, [visible, data, bar, trackIndex, theme]);
 
   return (
     <div ref={hostRef} className={`strip strip--${tone}`}>

@@ -14,6 +14,9 @@ No CLI and no audio playback — a website the band signs into.
   score, with a note-level list: *"Bar 12, beat 1: string 5, fret 7 → 9"*.
 - **Blame** — every bar coloured by the person who last changed it, or by age.
 - **Download** — any version, byte-for-byte identical to the file that was uploaded.
+- **Light and dark** — the score is engraved in the theme's colours rather than being
+  a white sheet pasted into a dark page. The toggle sits in the top bar and the choice
+  is remembered; a first visit follows the operating system's preference.
 
 ## How it works
 

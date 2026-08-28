@@ -6,19 +6,23 @@ import { BarStrip } from '../components/BarStrip.js';
 import { relativeTime } from '../format.js';
 import type { BarChange, ChangeKind, SongDiff, TrackDiff, Version } from '../types.js';
 
-/** New music is green and old music is red, the way a code diff reads. */
+/**
+ * New music is green and old music is red, the way a code diff reads. These are CSS
+ * variables rather than literals so the tints follow the light/dark theme without
+ * this component needing to know which one is active.
+ */
 const KIND_COLORS: Record<ChangeKind, string> = {
-  added: 'rgba(63, 185, 80, 0.26)',
-  modified: 'rgba(63, 185, 80, 0.26)',
-  removed: 'rgba(248, 81, 73, 0.26)',
-  moved: 'rgba(163, 113, 247, 0.26)'
+  added: 'var(--tint-added)',
+  modified: 'var(--tint-added)',
+  removed: 'var(--tint-removed)',
+  moved: 'var(--tint-moved)'
 };
 
 const KIND_EDGES: Record<ChangeKind, string> = {
-  added: 'rgba(63, 185, 80, 0.55)',
-  modified: 'rgba(63, 185, 80, 0.55)',
-  removed: 'rgba(248, 81, 73, 0.55)',
-  moved: 'rgba(163, 113, 247, 0.55)'
+  added: 'var(--tint-added-edge)',
+  modified: 'var(--tint-added-edge)',
+  removed: 'var(--tint-removed-edge)',
+  moved: 'var(--tint-moved-edge)'
 };
 
 const KIND_LABELS: Record<ChangeKind, string> = {

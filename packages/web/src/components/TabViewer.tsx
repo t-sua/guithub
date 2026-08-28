@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as alphaTab from '@coderline/alphatab';
+import { applyScoreTheme, useTheme } from '../theme.js';
 
 /** How one bar should be marked up in the rendered score. */
 export interface BarHighlight {
@@ -43,6 +44,7 @@ export function TabViewer({
   onBarClick,
   showNotation = true
 }: TabViewerProps) {
+  const { theme } = useTheme();
   const mountRef = useRef<HTMLDivElement | null>(null);
   const apiRef = useRef<alphaTab.AlphaTabApi | null>(null);
   const [overlays, setOverlays] = useState<Overlay[]>([]);
@@ -72,6 +74,8 @@ export function TabViewer({
       },
       player: { enablePlayer: false }
     });
+    applyScoreTheme(api.settings, theme);
+    api.updateSettings();
     apiRef.current = api;
 
     const collectBounds = (): void => {
@@ -130,6 +134,16 @@ export function TabViewer({
       cancelled = true;
     };
   }, [fileUrl]);
+
+  // A theme change only alters colours, so re-engrave the score already in memory
+  // rather than tearing the instance down and fetching the file again.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    applyScoreTheme(api.settings, theme);
+    api.updateSettings();
+    if (api.score) api.render();
+  }, [theme, status]);
 
   // Track selection is applied to the already-loaded score, avoiding a refetch.
   useEffect(() => {
