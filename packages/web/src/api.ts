@@ -50,6 +50,9 @@ export const api = {
 
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
 
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/api/me/password', json({ currentPassword, newPassword })),
+
   createUser: (input: {
     username: string;
     displayName: string;

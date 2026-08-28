@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth.js';
 import { AuthorColorProvider } from './authors.js';
 import { ThemeProvider, useTheme } from './theme.js';
 import { LoginPage, MembersPage } from './pages/Auth.js';
+import { AccountPage } from './pages/Account.js';
 import { SongsPage } from './pages/Songs.js';
 import { SongPage } from './pages/Song.js';
 import { ComparePage } from './pages/Compare.js';
@@ -80,7 +81,9 @@ function Shell() {
         <Link to="/">Songs</Link>
         <Link to="/members">Members</Link>
         <span className="topbar__spacer" />
-        <span className="topbar__user">{user.displayName}</span>
+        <Link to="/account" className="topbar__user" title="Your account">
+          {user.displayName}
+        </Link>
         <ThemeToggle />
         <button className="btn btn--small" onClick={() => void signOut()}>
           Sign out
@@ -89,6 +92,7 @@ function Shell() {
       <Routes>
         <Route path="/" element={<SongsPage />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route path="/account" element={<AccountPage />} />
         <Route path="/invite/:token" element={<Navigate to="/" replace />} />
         <Route path="/songs/:slug" element={<SongPage />} />
         <Route path="/songs/:slug/compare" element={<ComparePage />} />

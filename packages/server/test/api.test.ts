@@ -188,6 +188,118 @@ describe('setup and authentication', () => {
   });
 });
 
+describe('changing a password', () => {
+  async function changePassword(
+    cookie: string,
+    currentPassword: string,
+    newPassword: string
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: '/api/me/password',
+      cookies: { guithub_session: cookie },
+      payload: { currentPassword, newPassword }
+    });
+  }
+
+  it('replaces the password, and the old one stops working', async () => {
+    const cookie = await signUpFirstUser();
+    const changed = await changePassword(cookie, ADMIN_PASSWORD, 'a whole new passphrase');
+    expect(changed.statusCode).toBe(200);
+
+    const withOld = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'alice', password: ADMIN_PASSWORD }
+    });
+    expect(withOld.statusCode).toBe(401);
+
+    const withNew = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'alice', password: 'a whole new passphrase' }
+    });
+    expect(withNew.statusCode).toBe(200);
+  });
+
+  it('refuses without the current password', async () => {
+    const cookie = await signUpFirstUser();
+    const response = await changePassword(cookie, 'not my password', 'a whole new passphrase');
+    expect(response.statusCode).toBe(401);
+
+    // The old password must still work: a failed attempt changes nothing.
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'alice', password: ADMIN_PASSWORD }
+    });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it('refuses a new password that is too short, or the same as the old one', async () => {
+    const cookie = await signUpFirstUser();
+    expect((await changePassword(cookie, ADMIN_PASSWORD, 'short')).statusCode).toBe(400);
+    expect((await changePassword(cookie, ADMIN_PASSWORD, ADMIN_PASSWORD)).statusCode).toBe(400);
+  });
+
+  it('refuses anyone who is not signed in', async () => {
+    await signUpFirstUser();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/me/password',
+      payload: { currentPassword: ADMIN_PASSWORD, newPassword: 'a whole new passphrase' }
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('signs out the other sessions but keeps the one making the change', async () => {
+    const first = await signUpFirstUser();
+    const second = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/login',
+        payload: { username: 'alice', password: ADMIN_PASSWORD }
+      })
+    ).cookies[0]!.value;
+
+    // Both are live before the change.
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: second } }))
+        .json().user
+    ).toMatchObject({ username: 'alice' });
+
+    await changePassword(first, ADMIN_PASSWORD, 'a whole new passphrase');
+
+    const stale = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { guithub_session: second }
+    });
+    expect(stale.json().user).toBeNull();
+
+    const current = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { guithub_session: first }
+    });
+    expect(current.json().user).toMatchObject({ username: 'alice' });
+  });
+
+  it('does not touch anybody else\'s sessions', async () => {
+    const admin = await signUpFirstUser();
+    const bob = await addMember(admin, 'bob');
+
+    await changePassword(admin, ADMIN_PASSWORD, 'a whole new passphrase');
+
+    const stillIn = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { guithub_session: bob }
+    });
+    expect(stillIn.json().user).toMatchObject({ username: 'bob' });
+  });
+});
+
 describe('invites', () => {
   async function issueInvite(cookie: string, label = 'bass player'): Promise<string> {
     const response = await app.inject({

@@ -13,8 +13,11 @@ import {
   createUser,
   deleteSession,
   findSessionUser,
+  findUserById,
   listUsers,
   toPublicUser,
+  updatePassword,
+  verifyPassword,
   type PublicUser
 } from './auth.js';
 import {
@@ -143,6 +146,42 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   });
 
   app.get('/api/me', async request => ({ user: request.user ?? null }));
+
+  const passwordChangeSchema = z.object({
+    currentPassword: z.string().min(1).max(512),
+    newPassword: z.string().min(8).max(512)
+  });
+
+  /**
+   * Changes your own password. There is deliberately no route for an admin to set
+   * somebody else's: blame attributes bars to a person, and that only means something
+   * if nobody else can become them. An admin who needs to remove access revokes the
+   * account rather than taking it over.
+   */
+  app.post('/api/me/password', { config: strictLimit }, async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+
+    const parsed = passwordChangeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'A new password needs at least 8 characters.' });
+    }
+    const { currentPassword, newPassword } = parsed.data;
+
+    // The session already proves who this is, so re-asking for the current password
+    // is not about identity — it is what stops someone at an unattended browser from
+    // locking the owner out of their own account.
+    const row = findUserById(db, user.id);
+    if (!row || !(await verifyPassword(currentPassword, row.password_hash))) {
+      return reply.code(401).send({ error: 'That is not your current password.' });
+    }
+    if (currentPassword === newPassword) {
+      return reply.code(400).send({ error: 'The new password must be different from the old one.' });
+    }
+
+    await updatePassword(db, user.id, newPassword, request.cookies[SESSION_COOKIE]);
+    return { ok: true };
+  });
 
   const newUserSchema = z.object({
     username: z

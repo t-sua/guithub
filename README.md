@@ -139,175 +139,43 @@ against a stale `dist`. The published entry point is covered by `npm run build`.
 | `GUITHUB_PUBLIC_URL` | (derived) | Origin used to build invite links, e.g. `https://tabs.example.com` |
 | `GUITHUB_WEB_ROOT` | `packages/web/dist` | Built UI assets |
 
-## Deploying
+## Using the site
 
-GuitHub is a stateful single-node app: it drives the `git` binary over bare
-repositories and keeps its index in SQLite. It needs a persistent disk and exactly one
-instance. That rules out serverless platforms — Cloud Run, which Firebase App Hosting
-runs on, has no persistent disk, and its filesystem is wiped when an instance stops.
-A small VPS is the right home; about $11/month covers the server, its IPv4 address and
-an annualised domain, with backups free under Cloudflare R2's 10 GB tier.
+GuitHub lives at **https://guithub.us**. Sign in with the username and password you
+chose when you accepted your invite. There is no public sign-up — if you do not have an
+account, ask someone in the band for a link.
 
-### 1. A server
+**Add a song.** From **Songs**, click *New song* and give it a title. Then upload the
+first Guitar Pro file. The title and artist come from the file itself if it has them,
+so do not worry about matching them exactly.
 
-Any provider works. GuitHub needs a persistent disk, the `git` binary, Docker, and
-**at least 2 GB of RAM** — not for running it, but for building it: `npm ci` plus the
-Vite build plus compiling `better-sqlite3` will run out of memory in 1 GB.
+**Upload a new version.** Open the song and use *Upload version*. Write a short message
+saying what you changed — "tightened the bridge", "Dave's solo, take 3" — the same way
+you would name a take. That message is what everyone sees in the history, so it is
+worth the ten seconds.
 
-The recommendation is a **Vultr Cloud Compute** instance, Regular Performance
-`vc2-1c-2gb` — 1 vCPU / 2 GB / 55 GB SSD / 2 TB bandwidth, **$10/mo**, running
-Ubuntu 26.04 LTS. Unlike Hetzner, Vultr includes an IPv4 address in that price.
-26.04 drops cgroup v1 entirely, which Docker CE handles natively; nothing here needs
-configuring for it.
+**See what changed.** *Compare* puts two versions side by side and highlights the bars
+that differ on the score itself, with a note-level list underneath: *"Bar 12, beat 1:
+string 5, fret 7 → 9"*. Any two versions, not just neighbouring ones.
 
-Three things are worth knowing before you click Deploy:
+**See who wrote what.** *Blame* colours every bar by whoever last changed it, or by
+age. This survives bars moving around — inserting a bar at the top does not reassign
+credit for everything below it.
 
-- **Check swap before you build.** 2 GB is the build's floor, not its comfort zone, and
-  without headroom the first `docker compose up -d --build` can be OOM-killed partway
-  through `npm ci` or the Vite build. Whether you already have swap depends on the image:
-  the 26.04 image ships a generous swapfile, older ones often have none. Run
-  `swapon --show` and only create one if it prints nothing.
-- **Vultr is x86 only.** There is no ARM shared tier, so the arm64 image question that
-  mattered elsewhere does not arise here — and your laptop, if it is x86, now builds the
-  same architecture the server runs.
-- **Pick the region before the plan.** Regular Performance is Vultr's older Intel tier
-  and is not offered in every location; if it does not appear, the same box on newer
-  hardware is High Performance `vhp-1c-2gb` (AMD or Intel, NVMe) at about $12/mo, which
-  is a fair upgrade for two dollars. High Frequency (~$18/mo) is more CPU than a tab
-  server will ever use.
+**Get a file back.** *Download* on any version returns the original file, byte for
+byte, exactly as it was uploaded. Open it in Guitar Pro as normal.
 
-Bandwidth is 2 TB with overage at $0.01/GB. A decade of the band's tabs is measured in
-megabytes, so this is not a number you will ever look at again.
+**Change your password.** Click your name in the top bar. You need your current
+password, and changing it signs out any other browser you were signed in on — which is
+what you want if the reason you are changing it is that the old one got out.
 
-Vultr also offers a **Cloud Firewall** in the control panel, which filters at the network
-edge before traffic reaches the instance. Using it as well as `ufw` is worthwhile: create
-a firewall group allowing TCP 80 and 443 from anywhere and TCP 22 from your own address,
-then attach it to the instance. The two are belt and braces — `ufw` still protects you if
-the firewall group is ever detached.
-
-**The deploy user must be uid 1000.** `docker-compose.yml` runs the container as
-`1000:1000` and git refuses to open a repository owned by anyone else, so the account that
-owns `./data` has to be uid 1000. Vultr's 26.04 image already ships one — `linuxuser`,
-with sudo — and you should use it rather than adding another: a fresh `adduser guithub`
-lands on uid 1001, and the container then cannot read its own data directory. Check what
-you have before deciding:
+### Updating the live site
 
 ```bash
-awk -F: '$3==1000 {print $1}' /etc/passwd    # empty means you need to create one
+ssh <user>@<server> 'cd /opt/guithub && git pull && docker compose up -d --build'
 ```
 
-If it names an account, that is your deploy user. If it is empty, `adduser guithub` and
-confirm `id -u guithub` prints 1000.
-
-Then harden. **Install your SSH key before you disable password logins**, or you will
-lock yourself out of your own server. Substitute your deploy user for `<user>`:
-
-```bash
-install -d -m 700 -o <user> -g <user> /home/<user>/.ssh
-# From your laptop:  ssh-copy-id <user>@<server-ip>
-# or paste the key:  nano /home/<user>/.ssh/authorized_keys
-chown <user>:<user> /home/<user>/.ssh/authorized_keys && chmod 600 /home/<user>/.ssh/authorized_keys
-```
-
-Vultr's image puts that account in the `sudo` group but sets no password for it, so `sudo`
-will prompt for one you do not have. Give it a password with `passwd <user>`, or — the
-usual posture once SSH is key-only — grant passwordless sudo:
-
-```bash
-echo '<user> ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-<user>-nopasswd
-sudo chmod 440 /etc/sudoers.d/90-<user>-nopasswd
-sudo visudo -c -f /etc/sudoers.d/90-<user>-nopasswd     # never skip this check
-```
-
-That makes your SSH key the single credential for the box, which is the trade-off it
-sounds like. `PermitRootLogin prohibit-password` above keeps root reachable by key as a
-second way in if you ever mangle the sudoers file.
-
-Now open a **second terminal** and confirm `ssh <user>@<server-ip>` works while you are
-still logged in as root on the first. Only then continue:
-
-```bash
-sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
-sudo apt update && sudo apt install -y unattended-upgrades
-
-# SSH keys only. Editing sshd_config directly does NOT work here: cloud-init
-# writes /etc/ssh/sshd_config.d/50-cloud-init.conf containing
-# "PasswordAuthentication yes", the Include sits near the top of the main file,
-# and sshd honours the FIRST value it sees for a setting. So the override has to
-# be a drop-in that sorts earlier — hence 00-.
-sudo tee /etc/ssh/sshd_config.d/00-hardening.conf >/dev/null <<'CONF'
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PubkeyAuthentication yes
-PermitRootLogin prohibit-password
-CONF
-sudo chmod 600 /etc/ssh/sshd_config.d/00-hardening.conf
-
-# Validate before restarting, and confirm the override actually won:
-sudo sshd -t && sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin)'
-sudo systemctl restart ssh
-
-# Swap. CHECK FIRST — if this prints a row, you already have swap; skip the
-# fallocate block below. Running fallocate against a /swapfile the kernel is
-# already using truncates it underneath the kernel, which is as bad as it sounds.
-swapon --show
-
-# Only if the above printed nothing:
-sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
-sudo mkswap /swapfile && sudo swapon /swapfile
-echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-
-# Either way, stop the kernel paging out the running server just because swap exists:
-sudo sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swap.conf
-
-curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
-```
-
-Verify the lockout you were avoiding is really gone — from your laptop, this must fail:
-
-```bash
-ssh -o PubkeyAuthentication=no <user>@<server-ip>    # expect: Permission denied (publickey)
-```
-
-Log out and back in so the `docker` group applies, then check `free -h` shows swap.
-`vm.swappiness=10` matters because swap here is for the build spike, not for everyday
-use — the running server should stay in RAM.
-
-If you ever do lock yourself out, Vultr's web console in the control panel gets you back
-in over the hypervisor without SSH. That is the safety net; it is not a plan.
-
-### 2. A domain
-
-Register one (~$10–15/yr; Cloudflare Registrar sells at cost). Point an `A` record at
-the server's IP, **DNS-only** — if you use Cloudflare, leave the cloud grey so Caddy
-can complete the ACME challenge directly.
-
-### 3. Deploy
-
-```bash
-sudo mkdir -p /opt/guithub && sudo chown "$USER" /opt/guithub
-git clone https://github.com/t-sua/guithub /opt/guithub && cd /opt/guithub
-cp .env.example .env && $EDITOR .env          # set GUITHUB_DOMAIN and ACME_EMAIL
-mkdir -p data                                  # must be owned by uid 1000
-docker compose up -d --build
-```
-
-Caddy gets a certificate on first request. Then create the one account that cannot be
-created over the network:
-
-```bash
-docker compose exec guithub npm run create-admin --   --username you --name "Your Name" --email you@example.com
-```
-
-It prints a generated password once. Sign in, then invite everyone else.
-
-### Updating
-
-```bash
-cd /opt/guithub && git pull && docker compose up -d --build
-```
-
-About a minute of downtime. Logs: `docker compose logs -f guithub`.
+Songs and accounts live in `data/`, which is untouched by a rebuild.
 
 ## Accounts and invites
 
@@ -318,7 +186,9 @@ requires a shell on the server.
 
 Everyone else joins by invite. An admin creates a link on the **Members** page and
 sends it over; the invitee picks their own username and password, so nobody ever
-handles anyone else's credentials. Links are single-use, expire after 7 days, and can
+handles anyone else's credentials. Anyone can change their own password afterwards from
+their account page, and no admin can set somebody else's — blame only means something
+if nobody else can become you. Links are single-use, expire after 7 days, and can
 be revoked. Only the SHA-256 of a token is stored, so a copy of the database — a
 backup, a stolen disk — cannot be used to claim an invite.
 

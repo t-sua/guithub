@@ -116,6 +116,35 @@ export async function createUser(db: Db, input: NewUser): Promise<PublicUser> {
   return prepared.publicUser;
 }
 
+/**
+ * Replaces a password, and drops the user's other sessions.
+ *
+ * Signing the other sessions out is the point rather than a side effect: changing a
+ * password is how you respond to one having leaked, and that is worthless if a stolen
+ * session cookie keeps working afterwards. The session doing the change is kept so
+ * nobody is thrown out of the browser they are sitting at.
+ *
+ * Hashing happens before the transaction because better-sqlite3 transactions cannot
+ * span an await — the same constraint prepareUser works around.
+ */
+export async function updatePassword(
+  db: Db,
+  userId: string,
+  password: string,
+  keepSessionId?: string
+): Promise<void> {
+  const hash = await hashPassword(password);
+  const apply = db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId);
+    if (keepSessionId === undefined) {
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+    } else {
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?').run(userId, keepSessionId);
+    }
+  });
+  apply();
+}
+
 export function findUserByUsername(db: Db, username: string): UserRow | undefined {
   return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
     | UserRow
