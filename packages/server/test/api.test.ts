@@ -8,6 +8,7 @@ import { buildApp, isCommitish, isTrackPath, sanitiseFilename } from '../src/app
 import { openDatabase, type Db } from '../src/db.js';
 import { createUser } from '../src/auth.js';
 import { createInvite } from '../src/invites.js';
+import { createReset } from '../src/resets.js';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures');
 
@@ -297,6 +298,263 @@ describe('changing a password', () => {
       cookies: { guithub_session: bob }
     });
     expect(stillIn.json().user).toMatchObject({ username: 'bob' });
+  });
+});
+
+describe('password resets', () => {
+  async function issueReset(adminCookie: string, userId: string) {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/resets',
+      cookies: { guithub_session: adminCookie },
+      payload: { userId }
+    });
+    return response;
+  }
+
+  function tokenFrom(url: string): string {
+    return url.slice(url.lastIndexOf('/') + 1);
+  }
+
+  async function bobsId(adminCookie: string): Promise<string> {
+    const users = await app.inject({
+      method: 'GET',
+      url: '/api/users',
+      cookies: { guithub_session: adminCookie }
+    });
+    return (users.json().users as { id: string; username: string }[]).find(
+      u => u.username === 'bob'
+    )!.id;
+  }
+
+  it('lets someone who forgot their password choose a new one', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const issued = await issueReset(admin, await bobsId(admin));
+    expect(issued.statusCode).toBe(201);
+
+    const token = tokenFrom(issued.json().url as string);
+    const redeemed = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token, password: 'a brand new passphrase' }
+    });
+    expect(redeemed.statusCode).toBe(200);
+    expect(redeemed.json().user).toMatchObject({ username: 'bob' });
+
+    // Redeeming signs you in, so you are not left at a login screen.
+    const cookie = redeemed.cookies[0]!.value;
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { guithub_session: cookie }
+    });
+    expect(me.json().user).toMatchObject({ username: 'bob' });
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/login',
+      payload: { username: 'bob', password: 'a brand new passphrase' }
+    });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it('never grants admin through a reset', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const issued = await issueReset(admin, await bobsId(admin));
+    const redeemed = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token: tokenFrom(issued.json().url as string), password: 'a brand new passphrase' }
+    });
+    expect(redeemed.json().user.isAdmin).toBe(false);
+  });
+
+  it('signs out every session the account had open', async () => {
+    const admin = await signUpFirstUser();
+    const bobCookie = await addMember(admin, 'bob');
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/me', cookies: { guithub_session: bobCookie } }))
+        .json().user
+    ).toMatchObject({ username: 'bob' });
+
+    const issued = await issueReset(admin, await bobsId(admin));
+    await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token: tokenFrom(issued.json().url as string), password: 'a brand new passphrase' }
+    });
+
+    const stale = await app.inject({
+      method: 'GET',
+      url: '/api/me',
+      cookies: { guithub_session: bobCookie }
+    });
+    expect(stale.json().user).toBeNull();
+  });
+
+  it('accepts a link exactly once', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const issued = await issueReset(admin, await bobsId(admin));
+    const token = tokenFrom(issued.json().url as string);
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token, password: 'a brand new passphrase' }
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token, password: 'someone elses idea' }
+    });
+    expect(second.statusCode).toBe(400);
+    expect(second.json().problem).toBe('used');
+  });
+
+  it('issuing a new link invalidates the previous one', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const id = await bobsId(admin);
+    const first = tokenFrom((await issueReset(admin, id)).json().url as string);
+    const second = tokenFrom((await issueReset(admin, id)).json().url as string);
+
+    const stale = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token: first, password: 'a brand new passphrase' }
+    });
+    expect(stale.statusCode).toBe(400);
+
+    const fresh = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token: second, password: 'a brand new passphrase' }
+    });
+    expect(fresh.statusCode).toBe(200);
+  });
+
+  it('refuses an expired link', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const id = await bobsId(admin);
+    const { token } = createReset(db, {
+      userId: id,
+      createdBy: id,
+      now: new Date(Date.now() - 48 * 60 * 60 * 1000)
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token, password: 'a brand new passphrase' }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().problem).toBe('expired');
+  });
+
+  it('refuses an unknown token, and a password that is too short', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const issued = await issueReset(admin, await bobsId(admin));
+
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/resets/accept',
+          payload: { token: 'not-a-real-token', password: 'a brand new passphrase' }
+        })
+      ).statusCode
+    ).toBe(400);
+
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/resets/accept',
+          payload: { token: tokenFrom(issued.json().url as string), password: 'short' }
+        })
+      ).statusCode
+    ).toBe(400);
+  });
+
+  it('only lets an admin issue, list or revoke a reset', async () => {
+    const admin = await signUpFirstUser();
+    const bobCookie = await addMember(admin, 'bob');
+    const id = await bobsId(admin);
+
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/resets',
+          cookies: { guithub_session: bobCookie },
+          payload: { userId: id }
+        })
+      ).statusCode
+    ).toBe(403);
+
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/resets', cookies: { guithub_session: bobCookie } }))
+        .statusCode
+    ).toBe(403);
+
+    expect((await app.inject({ method: 'POST', url: '/api/resets', payload: { userId: id } })).statusCode).toBe(401);
+  });
+
+  it('keeps a used reset on the record, and can revoke an unused one', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const id = await bobsId(admin);
+    const issued = await issueReset(admin, id);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/api/resets',
+      cookies: { guithub_session: admin }
+    });
+    expect(listed.json().resets).toHaveLength(1);
+    expect(listed.json().resets[0]).toMatchObject({ username: 'bob', issuedBy: 'Alice', used: false });
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/resets/accept',
+      payload: { token: tokenFrom(issued.json().url as string), password: 'a brand new passphrase' }
+    });
+
+    // The audit trail survives use — that is what makes an admin-issued reset
+    // accountable rather than invisible.
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/resets',
+      cookies: { guithub_session: admin }
+    });
+    expect(after.json().resets[0]).toMatchObject({ used: true });
+
+    // A used one cannot be revoked away.
+    const revoked = await app.inject({
+      method: 'DELETE',
+      url: `/api/resets/${after.json().resets[0].id}`,
+      cookies: { guithub_session: admin }
+    });
+    expect(revoked.statusCode).toBe(404);
+  });
+
+  it('stores only the hash of a token', async () => {
+    const admin = await signUpFirstUser();
+    await addMember(admin, 'bob');
+    const issued = await issueReset(admin, await bobsId(admin));
+    const token = tokenFrom(issued.json().url as string);
+    const rows = db.prepare('SELECT token_hash FROM password_resets').all() as {
+      token_hash: string;
+    }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.token_hash).not.toBe(token);
+    expect(rows[0]!.token_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 

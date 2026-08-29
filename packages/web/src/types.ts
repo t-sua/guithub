@@ -135,6 +135,18 @@ export interface BlameLine {
   content: string;
 }
 
+export interface PasswordReset {
+  readonly id: string;
+  readonly userId: string;
+  readonly username: string;
+  readonly displayName: string;
+  readonly issuedBy: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly used: boolean;
+  readonly usedAt: string | null;
+}
+
 export interface Invite {
   id: string;
   label: string;

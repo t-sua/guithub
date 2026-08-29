@@ -2,6 +2,7 @@ import type {
   BlameLine,
   CanonicalSong,
   Invite,
+  PasswordReset,
   Provenance,
   Song,
   SongDiff,
@@ -84,6 +85,22 @@ export const api = {
     email: string;
     password: string;
   }) => request<{ user: User }>('/api/invites/accept', json(input)),
+
+  createReset: (userId: string) =>
+    request<{ url: string; expiresInHours: number; user: User }>('/api/resets', json({ userId })),
+
+  listResets: () => request<{ resets: PasswordReset[] }>('/api/resets'),
+
+  revokeReset: (id: string) =>
+    request<{ ok: boolean }>(`/api/resets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  checkReset: (token: string) =>
+    request<{ ok: boolean; username: string; displayName: string }>(
+      `/api/resets/${encodeURIComponent(token)}`
+    ),
+
+  acceptReset: (token: string, password: string) =>
+    request<{ user: User }>('/api/resets/accept', json({ token, password })),
 
   listSongs: () => request<{ songs: Song[] }>('/api/songs'),
 

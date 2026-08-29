@@ -58,6 +58,19 @@ const MIGRATIONS: readonly string[] = [
     used_by    TEXT REFERENCES users(id)
   );
   CREATE INDEX invites_pending ON invites(used_at, expires_at);
+  `,
+  `
+  CREATE TABLE password_resets (
+    id         TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT
+  );
+  CREATE INDEX password_resets_pending ON password_resets(used_at, expires_at);
+  CREATE INDEX password_resets_user ON password_resets(user_id);
   `
 ];
 

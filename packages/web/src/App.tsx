@@ -9,6 +9,7 @@ import { SongPage } from './pages/Song.js';
 import { ComparePage } from './pages/Compare.js';
 import { BlamePage } from './pages/Blame.js';
 import { InvitePage } from './pages/Invite.js';
+import { ResetPage } from './pages/Reset.js';
 
 export function App() {
   return (
@@ -66,6 +67,7 @@ function Shell() {
     return (
       <Routes>
         <Route path="/invite/:token" element={<InvitePage />} />
+        <Route path="/reset/:token" element={<ResetPage />} />
         <Route path="*" element={<LoginPage />} />
       </Routes>
     );
@@ -94,6 +96,7 @@ function Shell() {
         <Route path="/members" element={<MembersPage />} />
         <Route path="/account" element={<AccountPage />} />
         <Route path="/invite/:token" element={<Navigate to="/" replace />} />
+        <Route path="/reset/:token" element={<ResetPage />} />
         <Route path="/songs/:slug" element={<SongPage />} />
         <Route path="/songs/:slug/compare" element={<ComparePage />} />
         <Route path="/songs/:slug/blame" element={<BlamePage />} />

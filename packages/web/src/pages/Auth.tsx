@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.js';
 import { timeUntil } from '../format.js';
-import type { Invite, User } from '../types.js';
+import type { Invite, PasswordReset, User } from '../types.js';
 
 export function LoginPage() {
   const { signIn } = useAuth();
@@ -68,6 +68,9 @@ export function MembersPage() {
   const { user } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [resets, setResets] = useState<PasswordReset[]>([]);
+  const [resetLink, setResetLink] = useState<{ url: string; who: string } | null>(null);
+  const [resetCopied, setResetCopied] = useState(false);
   const [label, setLabel] = useState('');
   const [freshLink, setFreshLink] = useState('');
   const [copied, setCopied] = useState(false);
@@ -75,12 +78,14 @@ export function MembersPage() {
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    const [people, pending] = await Promise.all([
+    const [people, pending, recentResets] = await Promise.all([
       api.listUsers(),
-      user?.isAdmin ? api.listInvites() : Promise.resolve({ invites: [] as Invite[] })
+      user?.isAdmin ? api.listInvites() : Promise.resolve({ invites: [] as Invite[] }),
+      user?.isAdmin ? api.listResets() : Promise.resolve({ resets: [] as PasswordReset[] })
     ]);
     setUsers(people.users);
     setInvites(pending.invites);
+    setResets(recentResets.resets);
   };
 
   useEffect(() => {
@@ -112,6 +117,38 @@ export function MembersPage() {
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not revoke the invite.');
+    }
+  };
+
+  const issueReset = async (member: User) => {
+    setError('');
+    setResetCopied(false);
+    try {
+      const result = await api.createReset(member.id);
+      setResetLink({ url: result.url, who: member.displayName });
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not create the reset link.');
+    }
+  };
+
+  const revokeReset = async (id: string) => {
+    try {
+      await api.revokeReset(id);
+      setResetLink(null);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not revoke the reset link.');
+    }
+  };
+
+  const copyReset = async () => {
+    if (!resetLink) return;
+    try {
+      await navigator.clipboard.writeText(resetLink.url);
+      setResetCopied(true);
+    } catch {
+      // Clipboard access can be refused; the link is on screen to copy by hand.
     }
   };
 
@@ -152,9 +189,32 @@ export function MembersPage() {
                     {member.username} · {member.email}
                   </div>
                 </div>
+                {user?.isAdmin && member.id !== user.id && (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => void issueReset(member)}
+                    title={`Send ${member.displayName} a link to choose a new password`}
+                  >
+                    Reset password
+                  </button>
+                )}
               </div>
             ))}
           </div>
+
+          {resetLink && (
+            <div className="notice" style={{ marginTop: 16 }}>
+              <p style={{ margin: '0 0 8px' }}>
+                Send this to {resetLink.who}. It works once, expires in 12 hours, and is
+                not shown again. They choose the password — you never see it.
+              </p>
+              <div className="bar-line" style={{ marginBottom: 8 }}>{resetLink.url}</div>
+              <button type="button" className="btn btn--small" onClick={() => void copyReset()}>
+                {resetCopied ? 'Copied' : 'Copy link'}
+              </button>
+            </div>
+          )}
         </div>
 
         {user?.isAdmin && (
@@ -209,6 +269,37 @@ export function MembersPage() {
                       >
                         Revoke
                       </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {resets.length > 0 && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <h2 className="panel-title">Password resets</h2>
+                <p className="sub" style={{ marginTop: 0 }}>
+                  Kept on the record, used or not, so a reset is never invisible.
+                </p>
+                <div className="version-list">
+                  {resets.map(item => (
+                    <div key={item.id} className="version-row">
+                      <span className="version-row__main">
+                        <span className="version-row__message">{item.displayName}</span>
+                        <span className="version-row__meta">
+                          issued by {item.issuedBy} ·{' '}
+                          {item.used ? 'used' : `expires ${timeUntil(item.expiresAt)}`}
+                        </span>
+                      </span>
+                      {!item.used && (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          onClick={() => void revokeReset(item.id)}
+                        >
+                          Revoke
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

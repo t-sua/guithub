@@ -36,6 +36,16 @@ import {
   listInvites,
   revokeInvite
 } from './invites.js';
+import {
+  RESET_TTL_HOURS,
+  ResetError,
+  acceptReset,
+  createReset,
+  findUsableReset,
+  listResets,
+  resetTarget,
+  revokeReset
+} from './resets.js';
 import { blameTrack, listVersions, readTextAt } from './history.js';
 import {
   ACCEPTED_EXTENSIONS,
@@ -224,6 +234,102 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/api/users', async (request, reply) => {
     if (!requireUser(request, reply)) return;
     return { users: listUsers(db) };
+  });
+
+  // -------------------------------------------------------------------------
+  // Password resets
+  // -------------------------------------------------------------------------
+
+  function resetUrl(request: FastifyRequest, token: string): string {
+    if (options.publicUrl) return `${options.publicUrl.replace(/\/$/, '')}/reset/${token}`;
+    const host = request.headers.host ?? 'localhost';
+    return `${request.protocol}://${host}/reset/${token}`;
+  }
+
+  /**
+   * Issues a single-use reset link for someone who has forgotten their password. The
+   * token is returned here and nowhere else.
+   *
+   * An admin issues the link but never chooses the password — the person at the other
+   * end does. That is the whole point: an admin who could set your password could
+   * commit as you, and blame is only meaningful while nobody can.
+   */
+  app.post('/api/resets', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) {
+      return reply.code(403).send({ error: 'Only an admin can issue a reset link.' });
+    }
+
+    const parsed = z.object({ userId: z.string().min(1).max(64) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Which account?' });
+
+    const target = findUserById(db, parsed.data.userId);
+    if (!target) return reply.code(404).send({ error: 'No such account.' });
+
+    const { token } = createReset(db, { userId: target.id, createdBy: user.id });
+    return reply.code(201).send({
+      url: resetUrl(request, token),
+      expiresInHours: RESET_TTL_HOURS,
+      user: toPublicUser(target)
+    });
+  });
+
+  app.get('/api/resets', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) {
+      return reply.code(403).send({ error: 'Only an admin can see reset links.' });
+    }
+    return { resets: listResets(db) };
+  });
+
+  app.delete('/api/resets/:id', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (!user.isAdmin) {
+      return reply.code(403).send({ error: 'Only an admin can revoke a reset link.' });
+    }
+    const { id } = request.params as { id: string };
+    if (!revokeReset(db, id)) return reply.code(404).send({ error: 'No such pending reset.' });
+    return { ok: true };
+  });
+
+  /** Checks a link without consuming it, so the page can say whose account it is. */
+  app.get('/api/resets/:token', { config: strictLimit }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+    try {
+      const reset = findUsableReset(db, token);
+      const target = resetTarget(db, reset);
+      return { ok: true, username: target.username, displayName: target.display_name };
+    } catch (error) {
+      if (error instanceof ResetError) {
+        return reply.code(404).send({ error: error.message, problem: error.problem });
+      }
+      throw error;
+    }
+  });
+
+  /** Redeems a reset link. The person chooses their own password, and is signed in. */
+  app.post('/api/resets/accept', { config: strictLimit }, async (request, reply) => {
+    const parsed = z
+      .object({ token: z.string().min(1).max(200), password: z.string().min(8).max(512) })
+      .safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'A new password needs at least 8 characters.' });
+    }
+
+    try {
+      const user = await acceptReset(db, parsed.data);
+      const session = createSession(db, user.id);
+      setSessionCookie(reply, session.id);
+      return { user };
+    } catch (error) {
+      if (error instanceof ResetError) {
+        return reply.code(400).send({ error: error.message, problem: error.problem });
+      }
+      throw error;
+    }
   });
 
   // -------------------------------------------------------------------------
