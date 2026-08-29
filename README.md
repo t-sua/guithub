@@ -12,11 +12,11 @@ No CLI and no audio playback — a website the band signs into.
 - **History** — every version of every song, with who uploaded it and why.
 - **Diff** — compare any two versions. Changed bars are highlighted on the rendered
   score, with a note-level list: *"Bar 12, beat 1: string 5, fret 7 → 9"*.
-- **Blame** — every bar coloured by the person who last changed it, or by age.
+- **Blame** — every bar colored by the person who last changed it, or by age.
 - **Download** — any version, byte-for-byte identical to the file that was uploaded.
 - **Invite-only** — no public sign-up; admins send single-use links and the invitee
   picks their own password.
-- **Light and dark** — the score is engraved in the theme's colours rather than being
+- **Light and dark** — the score is engraved in the theme's colors rather than being
   a white sheet pasted into a dark page. The toggle sits in the top bar and the choice
   is remembered; a first visit follows the operating system's preference.
 
@@ -48,7 +48,7 @@ worth the ten seconds.
 that differ on the score itself, with a note-level list underneath: *"Bar 12, beat 1:
 string 5, fret 7 → 9"*. Any two versions, not just neighbouring ones.
 
-**See who wrote what.** *Blame* colours every bar by whoever last changed it, or by
+**See who wrote what.** *Blame* colors every bar by whoever last changed it, or by
 age. This survives bars moving around — inserting a bar at the top does not reassign
 credit for everything below it.
 
