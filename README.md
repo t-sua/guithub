@@ -61,6 +61,6 @@ what you want if the reason you are changing it is that the old one got out.
 
 ## Accounts and invites
 
-**There is no public sign-up, and no unauthenticated way to create an account** 
+**There is no public sign-up, and no unauthenticated way to create an account.** 
 
 Repeated failed logins are rate limited.
