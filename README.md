@@ -20,52 +20,6 @@ No CLI and no audio playback — a website the band signs into.
   a white sheet pasted into a dark page. The toggle sits in the top bar and the choice
   is remembered; a first visit follows the operating system's preference.
 
-## How it works
-
-Guitar Pro files are binary, so git cannot diff them usefully. GuitHub parses each
-upload and writes a deterministic text projection alongside the original, with
-**exactly one line per bar**:
-
-```
-tracks/01-guitar-1.tab
-  v0: 8[6/3] 8[6/5] 8[5/3h] 8[5/5]
-  v0: 4[5/7] 4[5/5] 8[6/3] 8[6/5] 8[5/3] 8[5/5]
-```
-
-`6/3` is the 6th string, 3rd fret; `h` is a hammer-on; `8` is an eighth note. Because
-each bar is one line, `git diff` gives bar-level change detection and `git blame`
-gives per-bar authorship — for free, from git itself, including move detection.
-
-Two details make this work well:
-
-- **Bar lines carry no bar number.** The line's position in the file *is* its bar
-  number. Numbering the lines would make inserting one bar rewrite every line after
-  it, destroying blame.
-- **Song structure lives in its own file.** Tempo, time signature, key, sections and
-  repeats go in `structure.tab`, not in the track files, so changing the tempo never
-  reassigns credit for anybody's notes.
-
-The original file is always the source of truth. The text projection is derived, and
-is only ever used for diffing and blame.
-
-### Storage layout
-
-One bare git repository per song:
-
-```
-<data-dir>/songs/<song-id>.git
-  song.json           metadata: title, tempo, track list, tunings
-  version.json        provenance for this version: original filename, sha256, time
-  structure.tab       one line per bar: time signature, tempo, key, sections, repeats
-  original.gp5        the exact bytes that were uploaded
-  tracks/01-guitar-1.tab
-  tracks/02-bass.tab
-```
-
-Versions are written with git plumbing — there is no working tree on the server, and
-concurrent uploads compare-and-swap the branch tip, so one can never silently discard
-another.
-
 ## Supported formats
 
 Reading (via [alphaTab](https://github.com/CoderLine/alphaTab), MPL-2.0): Guitar Pro
@@ -107,84 +61,6 @@ what you want if the reason you are changing it is that the old one got out.
 
 ## Accounts and invites
 
-**There is no public sign-up, and no unauthenticated way to create an account** — not
-even on an empty database. An endpoint that grants admin to its first caller is a land
-grab on a public URL, so the first administrator is made with `create-admin`, which
-requires a shell on the server.
-
-Everyone else joins by invite. An admin creates a link on the **Members** page and
-sends it over; the invitee picks their own username and password, so nobody ever
-handles anyone else's credentials. Anyone can change their own password afterwards from
-their account page, and no admin can set somebody else's — blame only means something
-if nobody else can become you. Links are single-use, expire after 7 days, and can
-be revoked. Only the SHA-256 of a token is stored, so a copy of the database — a
-backup, a stolen disk — cannot be used to claim an invite.
+**There is no public sign-up, and no unauthenticated way to create an account** 
 
 Repeated failed logins are rate limited.
-
-## Backups
-
-`scripts/backup.sh <data-dir> <backup-dir>` writes a dated directory containing a
-`git bundle` of every song and a consistent copy of the database. Each bundle is a
-complete, self-contained clone: it can be restored with plain `git clone` even without
-GuitHub.
-
-`scripts/offsite-backup.sh <data-dir>` wraps that with [restic](https://restic.net),
-pushing an encrypted, deduplicated copy to object storage and applying retention.
-Cloudflare R2 gives 10 GB free, which is a decade of tabs many times over. Put the
-credentials in a root-only `/etc/guithub/backup.env` — never in git:
-
-```bash
-RESTIC_REPOSITORY=s3:https://<account>.r2.cloudflarestorage.com/guithub-backup
-RESTIC_PASSWORD=<long passphrase — without it the backup is unreadable>
-AWS_ACCESS_KEY_ID=<R2 access key>
-AWS_SECRET_ACCESS_KEY=<R2 secret key>
-HEALTHCHECK_URL=https://hc-ping.com/<uuid>          # optional but recommended
-```
-
-Run it nightly with a systemd timer (or cron):
-
-```
-0 3 * * * /opt/guithub/scripts/offsite-backup.sh /opt/guithub/data
-```
-
-The `HEALTHCHECK_URL` matters more than it looks. A backup that has been failing
-silently for three months is worse than no backup, because you believe you are covered.
-[healthchecks.io](https://healthchecks.io) is free and emails you when a run is missed.
-
-### Do the restore drill
-
-**Before you rely on any of this, restore it once on purpose.**
-
-```bash
-restic snapshots
-restic restore latest --target /tmp/drill
-git clone /tmp/drill/**/songs/<song-id>.bundle /tmp/recovered
-ls /tmp/recovered            # song.json, structure.tab, tracks/, original.gp
-```
-
-Open the recovered `.gp` in Guitar Pro. If it plays, your backups work. This is a
-decade of the band's writing; it deserves a rehearsal rather than a hope.
-
-## Layout
-
-```
-packages/core/     canonicaliser and diff engine — pure, no I/O, heavily tested
-packages/server/   API, git storage, SQLite, auth
-packages/web/      React UI and the alphaTab renderer
-fixtures/          test corpus (.atex sources and the .gp files built from them)
-scripts/           backup and development helpers
-deploy/            Caddyfile
-Dockerfile, docker-compose.yml
-```
-
-## Tests
-
-```bash
-npm test
-```
-
-Covering, among others: the canonicaliser is deterministic and survives a Guitar Pro
-export round trip; the diff conserves every bar (nothing lost or invented) under
-property-based testing; inserting a bar reports one addition rather than a rewrite;
-and blame keeps credit with the original author when bars move.
